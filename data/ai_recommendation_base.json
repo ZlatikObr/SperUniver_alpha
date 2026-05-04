@@ -1,0 +1,644 @@
+{
+  "meta": {
+    "project": "Ревизор",
+    "version": "0.1-demo",
+    "date": "2026-05-04",
+    "purpose": "Статическая база рекомендаций внедрения ИИ для демо-версии без LLM-запроса на каждом клиентском прогоне.",
+    "runtime_mode": "lookup_rules_plus_templates",
+    "primary_audience": [
+      "консалтинговые агентства 3-50 консультантов",
+      "собственники и топ-менеджеры компаний с выручкой 100 млн - 5 млрд руб./год"
+    ],
+    "business_zones": [
+      "finance",
+      "operations",
+      "marketing_sales",
+      "team",
+      "strategy"
+    ]
+  },
+  "demo_runtime": {
+    "no_llm_runtime_principle": "После опроса прототип считает баллы по зонам риска, подбирает 2-4 карточки из recommendations и вставляет их в готовый шаблон отчета/КП.",
+    "input_contract": {
+      "industry": "string",
+      "company_size": "micro | small | medium | enterprise",
+      "revenue_band": "string",
+      "risk_scores": {
+        "finance": "0-5",
+        "operations": "0-5",
+        "marketing_sales": "0-5",
+        "team": "0-5",
+        "strategy": "0-5"
+      },
+      "pain_keywords": "array of strings",
+      "has_uploaded_financials": "boolean",
+      "has_uploaded_marketing_data": "boolean",
+      "urgency": "low | medium | high"
+    },
+    "selection_algorithm": [
+      "Для каждой рекомендации начать с score = 0.",
+      "Добавить +3, если основная зона рекомендации имеет risk_score >= 4.",
+      "Добавить +2, если вторичная зона рекомендации имеет risk_score >= 3.",
+      "Добавить +2 за каждое совпадение pain_keywords с trigger_keywords.",
+      "Добавить +1, если отрасль клиента входит в target_industries или recommendation.industry_fit = universal.",
+      "Добавить +1, если urgency = high и recommendation.time_to_first_value_weeks <= 4.",
+      "Исключить рекомендации, если unmet_prerequisites содержит критичное требование к данным.",
+      "Вернуть top 3 по score, но не больше одной рекомендации с одинаковым primary_zone, если есть альтернативы."
+    ],
+    "output_contract": {
+      "recommended_services": "array of recommendation ids",
+      "why_now": "template string from recommendation.value_statement_template",
+      "expected_effect": "range from recommendation.expected_effect",
+      "proof_cases": "2-3 evidence case ids",
+      "pilot_plan": "pilot_steps from recommendation"
+    }
+  },
+  "recommendations": [
+    {
+      "id": "rec_customer_service_ai_assistant",
+      "title": "AI-ассистент клиентского сервиса и первичной квалификации обращений",
+      "primary_zone": "operations",
+      "secondary_zones": [
+        "marketing_sales",
+        "team"
+      ],
+      "industry_fit": "universal",
+      "target_industries": [
+        "retail",
+        "banking",
+        "telecom",
+        "ecommerce",
+        "services",
+        "consulting"
+      ],
+      "trigger_keywords": [
+        "много повторяющихся вопросов",
+        "долго отвечаем клиентам",
+        "перегружен отдел продаж",
+        "низкая скорость обработки лидов",
+        "контакт-центр",
+        "support",
+        "первичная квалификация"
+      ],
+      "recommended_service": "Настроить AI-ассистента для FAQ, сбора вводных, маршрутизации заявки и подготовки краткого брифа для менеджера.",
+      "implementation_pattern": "RAG по базе знаний + классификатор интента + handoff к человеку + журнал качества ответов.",
+      "demo_template": "У клиента высокий риск в операциях/продажах: обращения обрабатываются вручную, скорость ответа влияет на конверсию. Рекомендуется AI-ассистент первой линии, который закрывает типовые вопросы, собирает вводные и передает менеджеру уже структурированный лид.",
+      "expected_effect": {
+        "metric": "снижение времени обработки и доли ручных обращений",
+        "range": "30-70% типовых запросов переводятся в самообслуживание; время ответа сокращается с часов/дней до минут",
+        "confidence": "medium"
+      },
+      "time_to_first_value_weeks": 2,
+      "data_prerequisites": [
+        "FAQ или база знаний",
+        "история обращений/чатов желательно, но не обязательно",
+        "правила передачи сложных кейсов человеку"
+      ],
+      "pilot_steps": [
+        "Выбрать 30-50 типовых вопросов и ответов.",
+        "Собрать сценарии маршрутизации: продажа, поддержка, претензия, другое.",
+        "Запустить ассистента на ограниченном канале.",
+        "Измерить deflection rate, время первого ответа, CSAT и долю эскалаций."
+      ],
+      "kpis": [
+        "first_response_time",
+        "share_resolved_without_human",
+        "lead_to_meeting_conversion",
+        "csat",
+        "cost_per_contact"
+      ],
+      "evidence_case_ids": [
+        "case_klarna_ai_assistant",
+        "case_bank_of_america_erica"
+      ]
+    },
+    {
+      "id": "rec_document_intelligence",
+      "title": "AI-разбор документов, договоров и управленческой отчетности",
+      "primary_zone": "finance",
+      "secondary_zones": [
+        "operations",
+        "strategy"
+      ],
+      "industry_fit": "universal",
+      "target_industries": [
+        "banking",
+        "insurance",
+        "legal",
+        "consulting",
+        "manufacturing",
+        "real_estate"
+      ],
+      "trigger_keywords": [
+        "много документов",
+        "ручной разбор отчетов",
+        "договоры",
+        "сверка",
+        "финансовая отчетность",
+        "PDF",
+        "Excel",
+        "коммерческие предложения"
+      ],
+      "recommended_service": "Внедрить документный AI-пайплайн: извлечение фактов, нормализация таблиц, проверка рисков и генерация краткого резюме для консультанта.",
+      "implementation_pattern": "Document parsing + OCR при необходимости + LLM/правила для структурирования + JSON-схемы + human review на критичных полях.",
+      "demo_template": "Клиент теряет время на ручном чтении и переносе данных из документов. Рекомендуется документный AI-пайплайн: он извлекает ключевые показатели, подсвечивает риски и формирует резюме для принятия решения.",
+      "expected_effect": {
+        "metric": "экономия времени экспертов на чтении и структурировании документов",
+        "range": "от 30% до 90% сокращения ручной обработки на типовых документах",
+        "confidence": "medium"
+      },
+      "time_to_first_value_weeks": 3,
+      "data_prerequisites": [
+        "10-30 примеров документов",
+        "перечень полей для извлечения",
+        "правила качества и проверки"
+      ],
+      "pilot_steps": [
+        "Выбрать один класс документов: договоры, отчеты или КП.",
+        "Определить JSON-схему извлекаемых фактов.",
+        "Прогнать 20 документов и сравнить с ручной разметкой.",
+        "Ввести ручную проверку только для полей с низкой уверенностью."
+      ],
+      "kpis": [
+        "processing_time_per_document",
+        "field_extraction_accuracy",
+        "manual_review_share",
+        "expert_hours_saved",
+        "risk_detection_precision"
+      ],
+      "evidence_case_ids": [
+        "case_jpmorgan_coin",
+        "case_moderna_chatgpt_enterprise"
+      ]
+    },
+    {
+      "id": "rec_sales_proposal_copilot",
+      "title": "AI-копилот для пресейла, КП и экспертных материалов",
+      "primary_zone": "marketing_sales",
+      "secondary_zones": [
+        "team",
+        "strategy"
+      ],
+      "industry_fit": "universal",
+      "target_industries": [
+        "consulting",
+        "b2b_services",
+        "software",
+        "industrial_services",
+        "education"
+      ],
+      "trigger_keywords": [
+        "долго готовим КП",
+        "пресейл",
+        "тендер",
+        "коммерческое предложение",
+        "нет единого стиля",
+        "много ручной подготовки",
+        "экспертные материалы"
+      ],
+      "recommended_service": "Собрать AI-копилота, который из брифа клиента, каталога услуг и библиотеки кейсов формирует черновик КП, письмо и план следующего шага.",
+      "implementation_pattern": "Шаблоны КП + каталог услуг + база кейсов + deterministic retrieval + опциональная генерация финального текста.",
+      "demo_template": "Клиент теряет сделки из-за медленного пресейла. Рекомендуется AI-копилот КП: он берет профиль клиента, выбирает релевантные услуги из базы и собирает черновик предложения с доказательными кейсами.",
+      "expected_effect": {
+        "metric": "ускорение подготовки первого черновика КП",
+        "range": "с дней до 20-60 минут для типового предложения",
+        "confidence": "medium"
+      },
+      "time_to_first_value_weeks": 2,
+      "data_prerequisites": [
+        "каталог услуг",
+        "5-10 успешных КП или шаблонов",
+        "список отраслей и типовых болей"
+      ],
+      "pilot_steps": [
+        "Описать 10-20 услуг в едином JSON.",
+        "Связать услуги с зонами риска и кейсами-доказательствами.",
+        "Собрать шаблон КП из блоков: проблема, решение, эффект, план пилота.",
+        "Проверить на 3 тестовых профилях клиентов."
+      ],
+      "kpis": [
+        "time_to_first_proposal",
+        "proposal_acceptance_rate",
+        "sales_cycle_days",
+        "expert_hours_per_lead",
+        "meeting_to_offer_conversion"
+      ],
+      "evidence_case_ids": [
+        "case_accenture_copilot",
+        "case_moderna_chatgpt_enterprise"
+      ]
+    },
+    {
+      "id": "rec_product_catalog_data_enrichment",
+      "title": "AI-нормализация каталога, карточек товаров и клиентских данных",
+      "primary_zone": "marketing_sales",
+      "secondary_zones": [
+        "operations"
+      ],
+      "industry_fit": "retail_ecommerce",
+      "target_industries": [
+        "retail",
+        "ecommerce",
+        "distribution",
+        "marketplace",
+        "manufacturing"
+      ],
+      "trigger_keywords": [
+        "грязный каталог",
+        "карточки товаров",
+        "дубли",
+        "описания товаров",
+        "низкая конверсия",
+        "данные в разных форматах",
+        "ручное обогащение"
+      ],
+      "recommended_service": "Внедрить AI-пайплайн очистки и обогащения каталога: дедупликация, атрибуты, описания, категории и проверка качества.",
+      "implementation_pattern": "Entity resolution + классификация категорий + генерация описаний по шаблону + контроль запрещенных утверждений.",
+      "demo_template": "У клиента маркетинг и продажи упираются в качество данных: карточки неполные, классификация разная, поиск работает хуже. Рекомендуется AI-нормализация каталога и карточек.",
+      "expected_effect": {
+        "metric": "ускорение обработки каталожных данных и рост качества карточек",
+        "range": "в крупных внедрениях обработка каталожных данных ускорялась в десятки раз; в пилоте целевой эффект 30-50% меньше ручной правки",
+        "confidence": "medium"
+      },
+      "time_to_first_value_weeks": 4,
+      "data_prerequisites": [
+        "экспорт каталога CSV/XLSX",
+        "правила категорий и обязательных атрибутов",
+        "примеры эталонных карточек"
+      ],
+      "pilot_steps": [
+        "Выбрать одну категорию или 500-1000 SKU.",
+        "Определить эталонную схему атрибутов.",
+        "Автоматически заполнить пропуски и найти дубли.",
+        "Сравнить качество карточек до/после на выборке."
+      ],
+      "kpis": [
+        "catalog_completion_rate",
+        "manual_edit_minutes_per_sku",
+        "duplicate_rate",
+        "search_zero_result_rate",
+        "conversion_rate"
+      ],
+      "evidence_case_ids": [
+        "case_walmart_product_catalog"
+      ]
+    },
+    {
+      "id": "rec_route_schedule_optimization",
+      "title": "AI-оптимизация маршрутов, смен, загрузки ресурсов и расписаний",
+      "primary_zone": "operations",
+      "secondary_zones": [
+        "finance"
+      ],
+      "industry_fit": "operations_heavy",
+      "target_industries": [
+        "logistics",
+        "field_service",
+        "retail",
+        "manufacturing",
+        "healthcare",
+        "construction"
+      ],
+      "trigger_keywords": [
+        "маршруты",
+        "доставка",
+        "смены",
+        "загрузка сотрудников",
+        "простой",
+        "перерасход топлива",
+        "планирование ресурсов"
+      ],
+      "recommended_service": "Провести пилот оптимизации расписаний или маршрутов на исторических данных с расчетом экономии времени, пробега или простоев.",
+      "implementation_pattern": "Optimization rules + прогноз спроса/нагрузки + сценарное моделирование + dashboard для диспетчера.",
+      "demo_template": "У клиента операционные затраты зависят от планирования людей, маршрутов или ресурсов. Рекомендуется AI/optimization-пилот, который считает несколько сценариев и выбирает вариант с меньшими затратами.",
+      "expected_effect": {
+        "metric": "экономия пробега, времени, топлива или простоев",
+        "range": "в зрелых внедрениях экономия измеряется миллионами километров/литров; в пилоте целевой эффект 5-15% на выбранном процессе",
+        "confidence": "medium"
+      },
+      "time_to_first_value_weeks": 4,
+      "data_prerequisites": [
+        "история заказов/маршрутов/смен",
+        "ограничения: время, люди, SLA, география",
+        "стоимость часа, километра или простоя"
+      ],
+      "pilot_steps": [
+        "Выбрать один процесс планирования.",
+        "Собрать 4-8 недель исторических данных.",
+        "Построить baseline текущих затрат.",
+        "Сравнить оптимизированный план с фактическим."
+      ],
+      "kpis": [
+        "distance_saved",
+        "fuel_saved",
+        "sla_breach_rate",
+        "idle_time",
+        "cost_per_order"
+      ],
+      "evidence_case_ids": [
+        "case_ups_orion"
+      ]
+    },
+    {
+      "id": "rec_hr_screening_onboarding",
+      "title": "AI-скрининг кандидатов, обучение и онбординг сотрудников",
+      "primary_zone": "team",
+      "secondary_zones": [
+        "operations"
+      ],
+      "industry_fit": "universal",
+      "target_industries": [
+        "retail",
+        "manufacturing",
+        "services",
+        "banking",
+        "consulting",
+        "it"
+      ],
+      "trigger_keywords": [
+        "много найма",
+        "долго закрываем вакансии",
+        "онбординг",
+        "обучение сотрудников",
+        "текучесть",
+        "HR",
+        "подбор"
+      ],
+      "recommended_service": "Настроить AI-поддержку HR: первичный скрининг, ответы кандидатам, база знаний для новичков и персональные треки обучения.",
+      "implementation_pattern": "Questionnaire scoring + HR knowledge base + role-based onboarding paths + audit на дискриминационные признаки.",
+      "demo_template": "Команда перегружена подбором и обучением. Рекомендуется AI-поддержка HR: она автоматизирует первичный скрининг, ускоряет коммуникацию и дает новичкам ответы из базы знаний.",
+      "expected_effect": {
+        "metric": "экономия времени HR и ускорение закрытия вакансий/адаптации",
+        "range": "в крупных кейсах экономия измерялась десятками тысяч часов интервью и отбора",
+        "confidence": "low"
+      },
+      "time_to_first_value_weeks": 3,
+      "data_prerequisites": [
+        "описания ролей",
+        "критерии оценки кандидатов",
+        "материалы онбординга",
+        "политика недискриминации"
+      ],
+      "pilot_steps": [
+        "Выбрать одну массовую роль или один трек онбординга.",
+        "Формализовать критерии и вопросы.",
+        "Запустить ассистента как помощника HR, не как финального решателя.",
+        "Проверить качество и fairness на выборке."
+      ],
+      "kpis": [
+        "time_to_screen_candidate",
+        "time_to_hire",
+        "new_hire_time_to_productivity",
+        "hr_hours_saved",
+        "candidate_nps"
+      ],
+      "evidence_case_ids": [
+        "case_unilever_hiring"
+      ]
+    },
+    {
+      "id": "rec_enterprise_knowledge_copilot",
+      "title": "Корпоративный AI-копилот по знаниям, регламентам и внутренним процессам",
+      "primary_zone": "team",
+      "secondary_zones": [
+        "strategy",
+        "operations"
+      ],
+      "industry_fit": "universal",
+      "target_industries": [
+        "banking",
+        "pharma",
+        "consulting",
+        "it",
+        "industrial",
+        "public_sector"
+      ],
+      "trigger_keywords": [
+        "знания разбросаны",
+        "сотрудники ищут документы",
+        "регламенты",
+        "внутренняя база знаний",
+        "много вопросов экспертам",
+        "быстро вводить людей"
+      ],
+      "recommended_service": "Создать защищенного AI-копилота по внутренним документам: поиск, ответы с источниками, резюме документов и шаблоны действий.",
+      "implementation_pattern": "RAG + role-based access + citations + feedback loop + запрет ответа без источника.",
+      "demo_template": "Клиент теряет производительность из-за разрозненных знаний. Рекомендуется корпоративный AI-копилот: он отвечает по внутренним документам, показывает источники и снижает нагрузку на экспертов.",
+      "expected_effect": {
+        "metric": "экономия времени на поиск информации и подготовку материалов",
+        "range": "типовые исследования показывают ускорение отдельных knowledge work задач на 20-50%",
+        "confidence": "medium"
+      },
+      "time_to_first_value_weeks": 4,
+      "data_prerequisites": [
+        "10-100 внутренних документов",
+        "матрица доступов",
+        "правила цитирования и запрета недостоверных ответов"
+      ],
+      "pilot_steps": [
+        "Выбрать один департамент и 50 документов.",
+        "Подготовить FAQ и тестовые вопросы.",
+        "Запустить копилота с обязательными ссылками на источники.",
+        "Измерить время поиска ответа до/после."
+      ],
+      "kpis": [
+        "search_time_saved",
+        "answer_groundedness",
+        "expert_interruptions",
+        "active_users",
+        "self_service_rate"
+      ],
+      "evidence_case_ids": [
+        "case_accenture_copilot",
+        "case_moderna_chatgpt_enterprise",
+        "case_bank_of_america_erica"
+      ]
+    },
+    {
+      "id": "rec_demand_forecasting_inventory",
+      "title": "AI-прогноз спроса, запасов и финансовых сценариев",
+      "primary_zone": "finance",
+      "secondary_zones": [
+        "operations",
+        "strategy"
+      ],
+      "industry_fit": "forecasting_heavy",
+      "target_industries": [
+        "retail",
+        "fmcg",
+        "manufacturing",
+        "distribution",
+        "food",
+        "pharma"
+      ],
+      "trigger_keywords": [
+        "прогноз спроса",
+        "запасы",
+        "дефицит",
+        "излишки",
+        "кассовые разрывы",
+        "план-факт",
+        "сценарное планирование"
+      ],
+      "recommended_service": "Построить AI-прогноз спроса/запасов и сценарный финансовый dashboard для управленческих решений.",
+      "implementation_pattern": "Time-series forecasting + внешние факторы + план-факт анализ + сценарии best/base/worst.",
+      "demo_template": "У клиента высокий финансово-операционный риск: решения принимаются без надежного прогноза спроса, запасов или cash-flow. Рекомендуется AI-прогноз и сценарная модель.",
+      "expected_effect": {
+        "metric": "снижение ошибки прогноза и стоимости запасов",
+        "range": "в зрелых кейсах ошибка прогноза снижалась на 20-30%; в пилоте цель 10-20%",
+        "confidence": "medium"
+      },
+      "time_to_first_value_weeks": 4,
+      "data_prerequisites": [
+        "история продаж/спроса за 6-24 месяца",
+        "цены, акции, сезонность",
+        "стоимость запасов и дефицита"
+      ],
+      "pilot_steps": [
+        "Выбрать 20-50 SKU или один продуктовый сегмент.",
+        "Собрать историю продаж и факторов.",
+        "Построить baseline против текущего прогноза.",
+        "Оценить эффект на запасах и выручке."
+      ],
+      "kpis": [
+        "forecast_accuracy",
+        "mape",
+        "stockout_rate",
+        "inventory_turnover",
+        "working_capital_released"
+      ],
+      "evidence_case_ids": [
+        "case_danone_demand_forecasting"
+      ]
+    }
+  ],
+  "evidence_cases": [
+    {
+      "id": "case_klarna_ai_assistant",
+      "company": "Klarna",
+      "company_scale": "global fintech",
+      "ai_use_case": "AI-ассистент клиентского сервиса",
+      "quantified_effect": [
+        "обрабатывал около двух третей клиентских чатов",
+        "выполнял работу, эквивалентную примерно 700 full-time agents",
+        "сократил среднее время решения с 11 минут до менее 2 минут",
+        "Klarna оценивала потенциальное улучшение прибыли в 40 млн долларов США в 2024 году"
+      ],
+      "relevance_for_revizor": "Доказательство для рекомендаций по customer support, первичной квалификации лидов и ускорению ответа клиенту.",
+      "source_type": "official",
+      "source_url": "https://www.klarna.com/international/press/klarna-ai-assistant-handles-two-thirds-of-customer-service-chats-in-its-first-month/"
+    },
+    {
+      "id": "case_bank_of_america_erica",
+      "company": "Bank of America",
+      "company_scale": "large bank",
+      "ai_use_case": "виртуальный финансовый ассистент Erica",
+      "quantified_effect": [
+        "более 2 млрд взаимодействий с момента запуска",
+        "более 42 млн клиентов использовали Erica",
+        "ассистент поддерживает персональные финансовые подсказки и самообслуживание"
+      ],
+      "relevance_for_revizor": "Доказательство массового adoption ассистентов и переноса части клиентских запросов в self-service.",
+      "source_type": "official",
+      "source_url": "https://newsroom.bankofamerica.com/content/newsroom/press-releases/2024/04/bank-of-america-s-erica-surpasses-2-billion-client-interactions.html"
+    },
+    {
+      "id": "case_jpmorgan_coin",
+      "company": "JPMorgan Chase",
+      "company_scale": "global bank",
+      "ai_use_case": "COIN: анализ юридических и кредитных документов",
+      "quantified_effect": [
+        "система была описана как сокращающая до 360 000 часов ежегодной ручной юридической работы",
+        "типовая задача чтения кредитных соглашений переводилась из ручного режима в автоматизированный анализ"
+      ],
+      "relevance_for_revizor": "Доказательство для документного AI: извлечение фактов, проверка договоров, анализ отчетности и КП.",
+      "source_type": "secondary",
+      "source_url": "https://www.bestpractice.ai/ai-case-study-best-practice/jpmorgan_chase__coi_uses_machine_learning_to_review_legal_documents_and_extract_important_data"
+    },
+    {
+      "id": "case_ups_orion",
+      "company": "UPS",
+      "company_scale": "global logistics company",
+      "ai_use_case": "ORION route optimization",
+      "quantified_effect": [
+        "UPS сообщала об экономии около 100 млн миль пробега в год",
+        "экономия топлива оценивалась примерно в 10 млн галлонов в год",
+        "снижение выбросов оценивалось примерно в 100 000 метрических тонн CO2 в год"
+      ],
+      "relevance_for_revizor": "Доказательство для рекомендаций по операционной оптимизации маршрутов, ресурсов и расписаний.",
+      "source_type": "official",
+      "source_url": "https://about.ups.com/us/en/our-company/innovation-driven/orion.html"
+    },
+    {
+      "id": "case_walmart_product_catalog",
+      "company": "Walmart",
+      "company_scale": "global retail company",
+      "ai_use_case": "генеративный AI для каталожных данных и shopping experience",
+      "quantified_effect": [
+        "Walmart описывал использование GenAI для улучшения более 850 млн pieces of data в product catalog",
+        "процесс, который занимал бы почти в 100 раз больше времени вручную, был ускорен с помощью AI"
+      ],
+      "relevance_for_revizor": "Доказательство для рекомендаций по нормализации каталога, карточек товаров и качества клиентских данных.",
+      "source_type": "official",
+      "source_url": "https://corporate.walmart.com/news/2024/01/09/how-walmart-is-using-ai-to-build-better-better-customer-and-associate-experiences"
+    },
+    {
+      "id": "case_accenture_copilot",
+      "company": "Accenture",
+      "company_scale": "global professional services company",
+      "ai_use_case": "Microsoft 365 Copilot / enterprise productivity rollout",
+      "quantified_effect": [
+        "развертывание охватывало сотни тысяч сотрудников Accenture",
+        "публичные материалы Microsoft и Accenture указывают на ускорение отдельных задач knowledge work и рост продуктивности пользователей Copilot"
+      ],
+      "relevance_for_revizor": "Доказательство для корпоративного копилота, пресейла, подготовки документов и внутренней базы знаний.",
+      "source_type": "vendor_case",
+      "source_url": "https://www.microsoft.com/en-us/worklab/work-trend-index/copilots-earliest-users-teach-us-about-generative-ai-at-work"
+    },
+    {
+      "id": "case_moderna_chatgpt_enterprise",
+      "company": "Moderna",
+      "company_scale": "global biotech company",
+      "ai_use_case": "ChatGPT Enterprise и внутренние GPTs",
+      "quantified_effect": [
+        "Moderna и OpenAI описывали создание более 750 custom GPTs внутри компании",
+        "use cases включали поддержку функций от юридических процессов до исследований и операций"
+      ],
+      "relevance_for_revizor": "Доказательство для базы внутренних AI-инструментов, документных помощников и масштабирования AI adoption.",
+      "source_type": "official_vendor_case",
+      "source_url": "https://openai.com/index/moderna/"
+    },
+    {
+      "id": "case_unilever_hiring",
+      "company": "Unilever",
+      "company_scale": "global FMCG company",
+      "ai_use_case": "AI-assisted recruitment screening",
+      "quantified_effect": [
+        "публичные разборы кейса сообщали об экономии около 100 000 часов интервью и отбора",
+        "AI использовался для первичной оценки кандидатов в массовом подборе"
+      ],
+      "relevance_for_revizor": "Доказательство для HR-скрининга, онбординга и автоматизации повторяющихся HR-процессов.",
+      "source_type": "secondary",
+      "source_url": "https://www.theguardian.com/technology/2019/oct/25/unilever-saves-on-recruiters-by-using-ai-to-assess-job-interviews"
+    },
+    {
+      "id": "case_danone_demand_forecasting",
+      "company": "Danone",
+      "company_scale": "global food company",
+      "ai_use_case": "machine-learning demand forecasting",
+      "quantified_effect": [
+        "case studies reported about 20% reduction in forecast error",
+        "reported improvements included lower lost sales and better planning productivity"
+      ],
+      "relevance_for_revizor": "Доказательство для прогнозирования спроса, запасов и сценарного финансового планирования.",
+      "source_type": "vendor_case",
+      "source_url": "https://www.toolsgroup.com/resources/case-study-danone/"
+    }
+  ],
+  "report_block_templates": {
+    "recommendation_summary": "Рекомендуем {title}, потому что зона {primary_zone} получила высокий риск, а в ответах клиента есть признаки: {matched_keywords}. Ожидаемый эффект: {expected_effect}.",
+    "proof_block": "Похожие крупные внедрения: {case_company} использовала {ai_use_case}; измеримый эффект: {quantified_effect}. Это подтверждает применимость подхода для пилота, но итоговый ROI нужно считать на данных клиента.",
+    "pilot_block": "Пилот на 2-4 недели: {pilot_steps}. Ключевые метрики: {kpis}.",
+    "risk_disclaimer": "Рекомендация является предварительной и основана на анкетных данных. Для точного business case нужен baseline процесса и 2-4 недели измерений."
+  }
+}
