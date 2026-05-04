@@ -1,4 +1,4 @@
-anthropic>=0.40.0
+openai>=1.30.0
 streamlit>=1.32.0
 pdfplumber>=0.10.0
 pandas>=2.0.0
@@ -7,3 +7,5 @@ pyyaml>=6.0
 python-dotenv>=1.0.0
 duckduckgo-search>=6.0.0
 markdown>=3.5.0
+weasyprint>=60.0
+matplotlib>=3.8.0

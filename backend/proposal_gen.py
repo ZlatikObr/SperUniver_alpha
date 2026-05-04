@@ -1,11 +1,25 @@
-"""Generates proposal text via Claude and renders it as a downloadable HTML."""
+"""Generates proposal text, renders HTML with charts, exports PDF."""
+import io
+import base64
 import yaml
 from pathlib import Path
 from datetime import date
 
-import anthropic
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import numpy as np
 
-MODEL = "claude-sonnet-4-6"
+from openai import OpenAI
+
+MODEL = "gpt-4o-mini"
+
+SCORE_COLORS = {1: "#E53935", 2: "#FB8C00", 3: "#FDD835", 4: "#43A047", 5: "#1E88E5"}
+ZONE_RU = {
+    "финансы": "Финансы", "операции": "Операции",
+    "маркетинг": "Маркетинг", "команда": "Команда", "стратегия": "Стратегия",
+}
 
 
 def _load_prompt(name: str) -> dict:
@@ -18,11 +32,11 @@ def generate_proposal_text(
     profile: dict,
     assessment: dict,
     selected_services: list[dict],
-    client: anthropic.Anthropic,
+    client: OpenAI,
 ) -> str:
     prompt = _load_prompt("proposal_v1")
-
     health = assessment.get("health_assessment", {})
+
     zones_text = ""
     for z in health.get("zones", []):
         score = z.get("score", "?")
@@ -60,84 +74,276 @@ def generate_proposal_text(
 Сформируй профессиональное КП в формате Markdown.
 """
 
-    response = client.messages.create(
+    response = client.chat.completions.create(
         model=MODEL,
-        max_tokens=3000,
-        system=prompt["system"],
-        messages=[{"role": "user", "content": user_message}],
+        max_tokens=1500,
+        messages=[
+            {"role": "system", "content": prompt["system"]},
+            {"role": "user", "content": user_message},
+        ],
     )
+    return response.choices[0].message.content or ""
 
-    return response.content[0].text
+
+# ─── Chart generators ─────────────────────────────────────────────────────────
+
+def _fig_to_base64(fig) -> str:
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", transparent=True)
+    buf.seek(0)
+    encoded = base64.b64encode(buf.read()).decode("utf-8")
+    plt.close(fig)
+    return encoded
 
 
-def render_html(proposal_markdown: str, profile: dict) -> str:
-    """Convert markdown proposal to a standalone HTML file with print-ready styles."""
+def _radar_chart(zones: list[dict]) -> str:
+    if not zones:
+        return ""
+
+    labels = [ZONE_RU.get(z["name"], z["name"].capitalize()) for z in zones]
+    scores = [z.get("score", 3) for z in zones]
+    N = len(labels)
+
+    angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
+    scores_plot = scores + [scores[0]]
+    angles += angles[:1]
+
+    fig, ax = plt.subplots(figsize=(4.5, 4.5), subplot_kw=dict(polar=True))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("#FAFAFA")
+
+    ax.plot(angles, scores_plot, "o-", linewidth=2, color="#FF5600")
+    ax.fill(angles, scores_plot, alpha=0.15, color="#FF5600")
+
+    ax.set_thetagrids(np.degrees(angles[:-1]), labels, fontsize=11, fontfamily="DejaVu Sans")
+    ax.set_ylim(0, 5)
+    ax.set_yticks([1, 2, 3, 4, 5])
+    ax.set_yticklabels(["1", "2", "3", "4", "5"], fontsize=8, color="#7b7b78")
+    ax.tick_params(pad=8)
+    ax.spines["polar"].set_color("#E0DED8")
+    ax.grid(color="#E0DED8", linewidth=0.8)
+
+    return _fig_to_base64(fig)
+
+
+def _bar_chart(zones: list[dict]) -> str:
+    if not zones:
+        return ""
+
+    labels = [ZONE_RU.get(z["name"], z["name"].capitalize()) for z in zones]
+    scores = [z.get("score", 3) for z in zones]
+    colors = [SCORE_COLORS.get(s, "#7b7b78") for s in scores]
+
+    fig, ax = plt.subplots(figsize=(6, 2.8))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    bars = ax.barh(labels, scores, color=colors, height=0.55, zorder=2)
+    ax.set_xlim(0, 5)
+    ax.set_xticks([1, 2, 3, 4, 5])
+    ax.xaxis.grid(True, color="#E0DED8", linewidth=0.8, zorder=1)
+    ax.set_axisbelow(True)
+
+    for bar, score in zip(bars, scores):
+        ax.text(
+            score + 0.08, bar.get_y() + bar.get_height() / 2,
+            f"{score}/5", va="center", fontsize=10, fontweight="bold",
+            color="#1E1E1E", fontfamily="DejaVu Sans",
+        )
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#E0DED8")
+    ax.spines["bottom"].set_color("#E0DED8")
+    ax.tick_params(colors="#1E1E1E", labelsize=10)
+
+    legend_items = [
+        mpatches.Patch(color="#E53935", label="Критично (1)"),
+        mpatches.Patch(color="#FB8C00", label="Проблемно (2)"),
+        mpatches.Patch(color="#FDD835", label="Внимание (3)"),
+        mpatches.Patch(color="#43A047", label="Хорошо (4)"),
+        mpatches.Patch(color="#1E88E5", label="Отлично (5)"),
+    ]
+    ax.legend(handles=legend_items, loc="lower right", fontsize=7,
+              framealpha=0.8, edgecolor="#E0DED8")
+
+    plt.tight_layout()
+    return _fig_to_base64(fig)
+
+
+def _risk_chart(top_risks: list[str]) -> str:
+    if not top_risks:
+        return ""
+
+    labels = [f"Риск {i+1}" for i in range(len(top_risks[:5]))]
+    weights = list(range(len(labels), 0, -1))
+
+    fig, ax = plt.subplots(figsize=(6, max(1.8, len(labels) * 0.6)))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    colors = ["#E53935", "#FB8C00", "#FDD835", "#43A047", "#1E88E5"][:len(labels)]
+    bars = ax.barh(labels[::-1], weights[::-1], color=colors[::-1], height=0.5, zorder=2)
+    ax.set_xlim(0, max(weights) + 0.5)
+    ax.xaxis.grid(True, color="#E0DED8", linewidth=0.8, zorder=1)
+    ax.set_axisbelow(True)
+    ax.set_xticks([])
+
+    for bar, label, risk in zip(bars, labels[::-1], top_risks[:len(labels)][::-1]):
+        truncated = risk[:55] + "…" if len(risk) > 55 else risk
+        ax.text(0.15, bar.get_y() + bar.get_height() / 2,
+                truncated, va="center", fontsize=9,
+                color="white", fontweight="500", fontfamily="DejaVu Sans")
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+    ax.spines["bottom"].set_color("#E0DED8")
+    ax.set_yticklabels([])
+    ax.tick_params(left=False)
+
+    plt.tight_layout()
+    return _fig_to_base64(fig)
+
+
+# ─── HTML renderer ────────────────────────────────────────────────────────────
+
+def render_html(proposal_markdown: str, profile: dict, assessment: dict = None) -> str:
     try:
         import markdown as md_lib
-        body_html = md_lib.markdown(
-            proposal_markdown,
-            extensions=["tables", "fenced_code"]
-        )
+        body_html = md_lib.markdown(proposal_markdown, extensions=["tables", "fenced_code"])
     except ImportError:
         body_html = _simple_md_to_html(proposal_markdown)
 
     company_info = f"{profile.get('industry', '')} · {profile.get('region', '')} · {profile.get('revenue_range', '')}"
     today = date.today().strftime("%d.%m.%Y")
 
+    # Generate charts
+    charts_html = ""
+    if assessment:
+        zones = assessment.get("health_assessment", {}).get("zones", [])
+        top_risks = assessment.get("health_assessment", {}).get("top_risks", [])
+
+        radar_b64 = _radar_chart(zones)
+        bar_b64 = _bar_chart(zones)
+        risk_b64 = _risk_chart(top_risks)
+
+        if radar_b64 and bar_b64:
+            charts_html = f"""
+<div class="charts-section">
+  <h2>Визуализация диагностики</h2>
+  <div class="charts-grid">
+    <div class="chart-card">
+      <h3>Радар здоровья бизнеса</h3>
+      <img src="data:image/png;base64,{radar_b64}" alt="Radar chart" style="width:100%;max-width:320px;display:block;margin:0 auto;">
+    </div>
+    <div class="chart-card">
+      <h3>Оценка по зонам</h3>
+      <img src="data:image/png;base64,{bar_b64}" alt="Bar chart" style="width:100%;display:block;">
+    </div>
+  </div>
+  {"<div class='chart-card chart-full'><h3>Приоритет рисков</h3><img src='data:image/png;base64," + risk_b64 + "' alt='Risk chart' style='width:100%;display:block;'></div>" if risk_b64 else ""}
+</div>
+"""
+
     return f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>КП — Ревизор</title>
+<title>КП — Пульс</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: 'Inter', Arial, sans-serif; font-size: 14px; color: #1a1a2e; background: #fff; }}
-  .wrapper {{ max-width: 800px; margin: 0 auto; padding: 40px 48px; }}
-  .header {{ border-bottom: 3px solid #2d6a4f; padding-bottom: 20px; margin-bottom: 32px; }}
-  .header h1 {{ font-size: 26px; font-weight: 700; color: #1b4332; }}
-  .header .meta {{ font-size: 13px; color: #6c757d; margin-top: 6px; }}
-  h2 {{ font-size: 18px; font-weight: 600; color: #1b4332; margin: 28px 0 12px; border-left: 4px solid #2d6a4f; padding-left: 10px; }}
-  h3 {{ font-size: 15px; font-weight: 600; color: #2d6a4f; margin: 20px 0 8px; }}
-  p {{ line-height: 1.7; margin-bottom: 10px; }}
-  ul, ol {{ padding-left: 22px; margin-bottom: 12px; }}
-  li {{ line-height: 1.7; margin-bottom: 4px; }}
-  table {{ width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }}
-  th {{ background: #1b4332; color: #fff; padding: 8px 12px; text-align: left; }}
-  td {{ padding: 8px 12px; border-bottom: 1px solid #dee2e6; }}
-  tr:nth-child(even) td {{ background: #f8f9fa; }}
-  strong {{ color: #1b4332; }}
-  .footer {{ margin-top: 40px; padding-top: 16px; border-top: 1px solid #dee2e6; font-size: 12px; color: #6c757d; font-style: italic; }}
+  body {{ font-family: 'Inter', Arial, sans-serif; font-size: 14px; color: #1E1E1E; background: #fff; }}
+  .wrapper {{ max-width: 820px; margin: 0 auto; padding: 48px 56px; }}
+
+  /* Header */
+  .header {{ display: flex; justify-content: space-between; align-items: flex-start;
+             border-bottom: 2px solid #FF5600; padding-bottom: 24px; margin-bottom: 36px; }}
+  .brand {{ font-size: 22px; font-weight: 800; letter-spacing: -0.5px; color: #1E1E1E; }}
+  .brand-dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+                background: #FF5600; margin-left: 4px; margin-bottom: 2px; }}
+  .brand-sub {{ font-size: 11px; color: #7b7b78; letter-spacing: 0.06em; margin-top: 3px; }}
+  .header-meta {{ text-align: right; font-size: 12px; color: #7b7b78; line-height: 1.8; }}
+
+  /* Body */
+  h2 {{ font-size: 18px; font-weight: 700; color: #1E1E1E;
+        margin: 32px 0 14px; padding-left: 12px;
+        border-left: 3px solid #FF5600; }}
+  h3 {{ font-size: 14px; font-weight: 600; color: #1E1E1E; margin: 18px 0 8px; }}
+  p {{ line-height: 1.75; margin-bottom: 10px; color: #1E1E1E; }}
+  ul, ol {{ padding-left: 20px; margin-bottom: 14px; }}
+  li {{ line-height: 1.75; margin-bottom: 4px; }}
+  strong {{ color: #1E1E1E; font-weight: 600; }}
+
+  /* Tables */
+  table {{ width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 13px; }}
+  th {{ background: #1E1E1E; color: #fff; padding: 10px 14px; text-align: left; font-weight: 600; }}
+  td {{ padding: 10px 14px; border-bottom: 1px solid #E0DED8; }}
+  tr:nth-child(even) td {{ background: #F7F7F5; }}
+
+  /* Charts */
+  .charts-section {{ margin: 32px 0; }}
+  .charts-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px; }}
+  .chart-card {{ background: #F7F7F5; border: 1px solid #E0DED8; border-radius: 10px; padding: 20px; }}
+  .chart-card h3 {{ font-size: 13px; color: #7b7b78; font-weight: 600;
+                    text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 14px; }}
+  .chart-full {{ grid-column: 1 / -1; }}
+
+  /* Highlight box */
+  .highlight {{ background: #FFF3EE; border-left: 3px solid #FF5600;
+                border-radius: 0 8px 8px 0; padding: 14px 18px; margin: 16px 0;
+                font-size: 13px; line-height: 1.7; }}
+
+  /* Footer */
+  .footer {{ margin-top: 48px; padding-top: 18px; border-top: 1px solid #E0DED8;
+             font-size: 11px; color: #7b7b78; font-style: italic; }}
+
   @media print {{
-    .no-print {{ display: none; }}
     body {{ font-size: 12px; }}
-    .wrapper {{ padding: 20px; }}
+    .wrapper {{ padding: 24px 28px; }}
+    .charts-grid {{ grid-template-columns: 1fr 1fr; }}
   }}
 </style>
 </head>
 <body>
 <div class="wrapper">
   <div class="header">
-    <h1>Коммерческое предложение</h1>
-    <div class="meta">{company_info} &nbsp;|&nbsp; Дата: {today} &nbsp;|&nbsp; Подготовлено: Ревизор AI</div>
+    <div>
+      <div class="brand">ПУЛЬС <span class="brand-dot"></span></div>
+      <div class="brand-sub">AI-ДИАГНОСТИКА БИЗНЕСА</div>
+    </div>
+    <div class="header-meta">
+      {company_info}<br>
+      Дата: {today}
+    </div>
   </div>
+
+  {charts_html}
 
   {body_html}
 
   <div class="footer">
     Анализ носит рекомендательный характер и подготовлен на основе предоставленных данных.
     Для принятия управленческих решений рекомендуется верификация с профильным консультантом.
+    Подготовлено: Пульс AI · {today}
   </div>
 </div>
 </body>
 </html>"""
 
 
-def _simple_md_to_html(text: str) -> str:
-    """Minimal markdown → HTML conversion without external dependencies."""
-    import re
+def render_pdf(html: str) -> bytes | None:
+    try:
+        from weasyprint import HTML as WeasyprintHTML
+        return WeasyprintHTML(string=html).write_pdf()
+    except Exception:
+        return None
 
+
+def _simple_md_to_html(text: str) -> str:
+    import re
     lines = text.split("\n")
     html_parts = []
     in_list = False
@@ -162,8 +368,7 @@ def _simple_md_to_html(text: str) -> str:
             if not in_list:
                 html_parts.append("<ul>")
                 in_list = True
-            item = line[2:]
-            item = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", item)
+            item = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line[2:])
             html_parts.append(f"<li>{item}</li>")
         elif line.strip() == "":
             if in_list:
