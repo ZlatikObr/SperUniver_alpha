@@ -263,9 +263,12 @@ def _go(step: str):
 
 
 def _get_client() -> OpenAI:
-    api_key = os.getenv("AITUNNEL_API_KEY", "")
+    # Streamlit Cloud secrets take priority, then .env
+    api_key = st.secrets.get("AITUNNEL_API_KEY", "") if hasattr(st, "secrets") else ""
     if not api_key:
-        st.error("AITUNNEL_API_KEY не задан. Добавьте его в файл .env")
+        api_key = os.getenv("AITUNNEL_API_KEY", "")
+    if not api_key:
+        st.error("AITUNNEL_API_KEY не задан. Добавьте в Streamlit Cloud → Settings → Secrets.")
         st.stop()
     return OpenAI(api_key=api_key, base_url="https://api.aitunnel.ru/v1/")
 
