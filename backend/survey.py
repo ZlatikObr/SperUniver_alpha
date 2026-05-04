@@ -2,9 +2,9 @@ import json
 import yaml
 from pathlib import Path
 
-import anthropic
+from openai import OpenAI
 
-MODEL = "claude-sonnet-4-6"
+MODEL = "gpt-4o-mini"
 
 BASE_QUESTIONS = [
     {
@@ -101,12 +101,25 @@ def _load_prompt(name: str) -> dict:
         return yaml.safe_load(f)
 
 
-def _extract_json(text: str, bracket: str = "[") -> str | None:
-    close = "]" if bracket == "[" else "}"
-    start = text.find(bracket)
-    end = text.rfind(close) + 1
+def _extract_json_array(text: str) -> list | None:
+    start = text.find("[")
+    end = text.rfind("]") + 1
     if start >= 0 and end > start:
-        return text[start:end]
+        try:
+            return json.loads(text[start:end])
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
+def _extract_json_object(text: str) -> dict | None:
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start >= 0 and end > start:
+        try:
+            return json.loads(text[start:end])
+        except json.JSONDecodeError:
+            pass
     return None
 
 
@@ -114,31 +127,30 @@ def get_base_questions() -> list[dict]:
     return BASE_QUESTIONS
 
 
-def generate_followup_questions(answers: dict, client: anthropic.Anthropic) -> list[dict]:
+def generate_followup_questions(answers: dict, client: OpenAI) -> list[dict]:
     prompt = _load_prompt("survey_v1")
     answers_text = "\n".join(f"— {k}: {v}" for k, v in answers.items())
 
-    response = client.messages.create(
+    response = client.chat.completions.create(
         model=MODEL,
-        max_tokens=1000,
-        system=prompt["system"],
-        messages=[{
-            "role": "user",
-            "content": (
-                "Ответы клиента на базовые вопросы:\n"
-                f"{answers_text}\n\n"
-                "Сгенерируй ровно 3 уточняющих вопроса в формате JSON-массива."
-            )
-        }]
+        max_tokens=700,
+        messages=[
+            {"role": "system", "content": prompt["system"]},
+            {
+                "role": "user",
+                "content": (
+                    "Ответы клиента на базовые вопросы:\n"
+                    f"{answers_text}\n\n"
+                    "Сгенерируй ровно 3 уточняющих вопроса в формате JSON-массива."
+                )
+            }
+        ]
     )
 
-    raw = response.content[0].text
-    fragment = _extract_json(raw, "[")
-    if fragment:
-        try:
-            return json.loads(fragment)
-        except json.JSONDecodeError:
-            pass
+    raw = response.choices[0].message.content or ""
+    result = _extract_json_array(raw)
+    if result:
+        return result
 
     return [
         {"id": "followup_1", "text": "Какой результат вы ожидаете получить от работы с консультантом?", "type": "text"},
@@ -148,29 +160,28 @@ def generate_followup_questions(answers: dict, client: anthropic.Anthropic) -> l
     ]
 
 
-def build_business_profile(base_answers: dict, followup_answers: dict, client: anthropic.Anthropic) -> dict:
+def build_business_profile(base_answers: dict, followup_answers: dict, client: OpenAI) -> dict:
     all_answers = {**base_answers, **followup_answers}
     answers_text = "\n".join(f"— {k}: {v}" for k, v in all_answers.items())
 
     prompt = _load_prompt("survey_v1")
 
-    response = client.messages.create(
+    response = client.chat.completions.create(
         model=MODEL,
-        max_tokens=800,
-        system=prompt["profile_system"],
-        messages=[{
-            "role": "user",
-            "content": f"Создай структурированный JSON-профиль бизнеса на основе ответов:\n\n{answers_text}"
-        }]
+        max_tokens=600,
+        messages=[
+            {"role": "system", "content": prompt["profile_system"]},
+            {
+                "role": "user",
+                "content": f"Создай структурированный JSON-профиль бизнеса на основе ответов:\n\n{answers_text}"
+            }
+        ]
     )
 
-    raw = response.content[0].text
-    fragment = _extract_json(raw, "{")
-    if fragment:
-        try:
-            return json.loads(fragment)
-        except json.JSONDecodeError:
-            pass
+    raw = response.choices[0].message.content or ""
+    result = _extract_json_object(raw)
+    if result:
+        return result
 
     return {
         "industry": base_answers.get("industry", "Не указано"),

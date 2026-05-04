@@ -1,27 +1,30 @@
-"""Business health analysis via Claude with optional web_search enrichment."""
+"""Business health analysis via OpenRouter (OpenAI-compatible) with optional web_search enrichment."""
 import json
 import yaml
 from pathlib import Path
 
-import anthropic
+from openai import OpenAI
 
-MODEL = "claude-sonnet-4-6"
+MODEL = "gpt-4o-mini"
 
 WEB_SEARCH_TOOL = {
-    "name": "web_search",
-    "description": (
-        "Поиск открытых отраслевых данных: бенчмарки, средние показатели по рынку, "
-        "тренды в отрасли. Используй для обогащения анализа при отсутствии документа клиента."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "Поисковый запрос на русском языке"
-            }
-        },
-        "required": ["query"]
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": (
+            "Поиск открытых отраслевых данных: бенчмарки, средние показатели по рынку, "
+            "тренды в отрасли. Используй для обогащения анализа при отсутствии документа клиента."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Поисковый запрос на русском языке"
+                }
+            },
+            "required": ["query"]
+        }
     }
 }
 
@@ -32,7 +35,7 @@ def _load_prompt(name: str) -> dict:
         return yaml.safe_load(f)
 
 
-def _extract_json(text: str) -> dict | None:
+def _extract_json_object(text: str) -> dict | None:
     start = text.find("{")
     end = text.rfind("}") + 1
     if start >= 0 and end > start:
@@ -60,33 +63,28 @@ def _web_search(query: str) -> str:
 def analyze_business(
     profile: dict,
     doc_metrics: dict | None,
-    client: anthropic.Anthropic,
+    client: OpenAI,
     answer_count: int = 10,
 ) -> dict:
-    """
-    Run 5-zone business health assessment.
-
-    Returns the health_assessment JSON as defined in audit_v1.yaml.
-    Falls back to a minimal structure on parse errors.
-    """
     if answer_count < 5:
         return _partial_assessment(profile)
 
     prompt = _load_prompt("audit_v1")
     user_content = _build_user_message(profile, doc_metrics)
-
     use_search = doc_metrics is None or not doc_metrics.get("summary")
 
     if use_search:
         result = _run_with_tools(prompt["system"], user_content, client)
     else:
-        response = client.messages.create(
+        response = client.chat.completions.create(
             model=MODEL,
-            max_tokens=2500,
-            system=prompt["system"],
-            messages=[{"role": "user", "content": user_content}],
+            max_tokens=1500,
+            messages=[
+                {"role": "system", "content": prompt["system"]},
+                {"role": "user", "content": user_content},
+            ],
         )
-        result = _extract_json(response.content[0].text)
+        result = _extract_json_object(response.choices[0].message.content or "")
 
     if result is None:
         return _fallback_assessment(profile)
@@ -112,44 +110,49 @@ def _build_user_message(profile: dict, doc_metrics: dict | None) -> str:
                 parts.append(f"- {k}: {v}")
         parts.append(f"\nТекст документа (фрагмент):\n{doc_metrics['summary'][:2000]}")
     else:
-        parts.append("\n*Документ не прикреплён. Используй web_search для обогащения отраслевым контекстом.*")
+        parts.append(
+            "\n*Документ не прикреплён. Используй функцию web_search "
+            "для обогащения анализа отраслевым контекстом.*"
+        )
 
     return "\n".join(parts)
 
 
-def _run_with_tools(system: str, user_content: str, client: anthropic.Anthropic) -> dict | None:
-    messages = [{"role": "user", "content": user_content}]
-    search_results = []
+def _run_with_tools(system: str, user_content: str, client: OpenAI) -> dict | None:
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_content},
+    ]
 
     for _ in range(5):
-        response = client.messages.create(
+        response = client.chat.completions.create(
             model=MODEL,
-            max_tokens=2500,
-            system=system,
+            max_tokens=1500,
             messages=messages,
             tools=[WEB_SEARCH_TOOL],
+            tool_choice="auto",
         )
 
-        if response.stop_reason == "end_turn":
-            for block in response.content:
-                if hasattr(block, "text"):
-                    return _extract_json(block.text)
-            return None
+        choice = response.choices[0]
+        finish_reason = choice.finish_reason
 
-        if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use" and block.name == "web_search":
-                    query = block.input.get("query", "")
-                    search_text = _web_search(query)
-                    search_results.append(f"Запрос: {query}\nРезультат: {search_text[:800]}")
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": search_text,
+        if finish_reason == "stop":
+            return _extract_json_object(choice.message.content or "")
+
+        if finish_reason == "tool_calls":
+            tool_calls = choice.message.tool_calls or []
+            messages.append({"role": "assistant", "content": choice.message.content, "tool_calls": tool_calls})
+
+            for tc in tool_calls:
+                if tc.function.name == "web_search":
+                    args = json.loads(tc.function.arguments)
+                    query = args.get("query", "")
+                    search_result = _web_search(query)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": search_result,
                     })
-            messages.append({"role": "assistant", "content": response.content})
-            messages.append({"role": "user", "content": tool_results})
         else:
             break
 
