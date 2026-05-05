@@ -25,15 +25,161 @@ ZONE_RU = {
 }
 
 
-def _build_services_section(selected_services: list[dict]) -> str:
+def _parse_price_range(price_str: str) -> tuple[int, int]:
+    """'150 000 – 350 000 ₽' → (150000, 350000)"""
+    import re
+    nums = [int(n.replace(" ", "").replace(" ", ""))
+            for n in re.findall(r"[\d][\d\s ]*", price_str)
+            if n.strip().replace(" ", "").replace(" ", "").isdigit() or
+               re.sub(r"[\s ]", "", n).isdigit()]
+    # simpler: just grab all digit groups
+    raw = re.findall(r"\d[\d\s]*\d|\d", price_str)
+    nums = []
+    for r in raw:
+        try:
+            nums.append(int(r.replace(" ", "").replace(" ", "")))
+        except ValueError:
+            pass
+    if len(nums) >= 2:
+        return nums[0], nums[1]
+    if len(nums) == 1:
+        return nums[0], nums[0]
+    return 0, 0
+
+
+def _parse_roi_range(roi_str: str) -> tuple[int, int]:
+    """'300–500%' → (300, 500); '500–∞' → (500, 500)"""
+    import re
+    nums = [int(n) for n in re.findall(r"\d+", roi_str or "")]
+    if len(nums) >= 2:
+        return nums[0], nums[1]
+    if len(nums) == 1:
+        return nums[0], nums[0]
+    return 0, 0
+
+
+def _format_rub(n: int) -> str:
+    """1500000 → '1 500 000 ₽'"""
+    return f"{n:,}".replace(",", " ") + " ₽"
+
+
+def _build_package_summary(selected_services: list[dict]) -> str:
     """
-    Build the services block programmatically — 100% guaranteed to include
-    every service the user selected, regardless of LLM token limits.
+    HTML block with two investment scenarios placed at the top of the
+    services section:
+      • Минимальный пакет — top-3 by ROI
+      • Полный пакет      — all selected services
     """
     if not selected_services:
         return ""
 
-    lines = ["## Перечень услуг\n"]
+    # Sort by max-ROI to find the top-3 recommended
+    def roi_key(svc: dict) -> int:
+        _, hi = _parse_roi_range(svc.get("roi_estimate", ""))
+        return hi
+
+    sorted_svcs = sorted(selected_services, key=roi_key, reverse=True)
+    min_pkg = sorted_svcs[:3]
+    max_pkg = selected_services
+
+    def pkg_totals(svcs: list[dict]) -> tuple[int, int, int, int]:
+        """Returns (price_lo, price_hi, roi_lo, roi_hi)."""
+        p_lo, p_hi = 0, 0
+        r_lo, r_hi = 10_000, 0
+        for svc in svcs:
+            lo, hi = _parse_price_range(svc.get("price_range", ""))
+            p_lo += lo
+            p_hi += hi
+            rlo, rhi = _parse_roi_range(svc.get("roi_estimate", ""))
+            if rlo > 0:
+                r_lo = min(r_lo, rlo)
+            r_hi = max(r_hi, rhi)
+        if r_lo == 10_000:
+            r_lo = 0
+        return p_lo, p_hi, r_lo, r_hi
+
+    mp_lo, mp_hi, mr_lo, mr_hi = pkg_totals(min_pkg)
+    fp_lo, fp_hi, fr_lo, fr_hi = pkg_totals(max_pkg)
+
+    min_names = " · ".join(s.get("name", "") for s in min_pkg)
+
+    same_pkg = len(selected_services) <= 3
+
+    if same_pkg:
+        # Only one scenario to show
+        block = f"""
+<div style="margin:24px 0 32px;border-radius:12px;overflow:hidden;font-family:Arial,sans-serif;">
+  <div style="background:#1E1E1E;color:#fff;padding:18px 24px;">
+    <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;
+                color:#FF5600;font-weight:700;margin-bottom:6px;">Ваш пакет · {len(selected_services)} услуги</div>
+    <div style="font-size:22px;font-weight:800;letter-spacing:-0.5px;">
+      {_format_rub(fp_lo)} – {_format_rub(fp_hi)}
+    </div>
+    <div style="font-size:13px;color:#ccc;margin-top:4px;">
+      Ожидаемый ROI: <b style="color:#FF5600;">{fr_lo}–{fr_hi}%</b>
+    </div>
+  </div>
+</div>
+"""
+    else:
+        block = f"""
+<div style="margin:24px 0 32px;border-radius:12px;overflow:hidden;
+            font-family:Arial,sans-serif;border:1px solid #E0DED8;">
+  <div style="display:grid;grid-template-columns:1fr 1fr;">
+
+    <div style="background:#1E1E1E;color:#fff;padding:22px 24px;border-right:1px solid #333;">
+      <div style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;
+                  color:#FF5600;font-weight:700;margin-bottom:8px;">
+        ★ Минимальный пакет · топ-3 по ROI
+      </div>
+      <div style="font-size:24px;font-weight:800;letter-spacing:-0.5px;line-height:1.1;">
+        {_format_rub(mp_lo)}<br>
+        <span style="font-size:16px;font-weight:500;color:#aaa;">до {_format_rub(mp_hi)}</span>
+      </div>
+      <div style="font-size:13px;color:#ccc;margin-top:8px;">
+        ROI: <b style="color:#FF5600;">{mr_lo}–{mr_hi}%</b>
+      </div>
+      <div style="font-size:11px;color:#888;margin-top:10px;line-height:1.5;">
+        {min_names}
+      </div>
+    </div>
+
+    <div style="background:#F7F7F5;padding:22px 24px;">
+      <div style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;
+                  color:#7b7b78;font-weight:700;margin-bottom:8px;">
+        Полный пакет · все {len(selected_services)} услуг
+      </div>
+      <div style="font-size:24px;font-weight:800;letter-spacing:-0.5px;
+                  color:#1E1E1E;line-height:1.1;">
+        {_format_rub(fp_lo)}<br>
+        <span style="font-size:16px;font-weight:500;color:#7b7b78;">до {_format_rub(fp_hi)}</span>
+      </div>
+      <div style="font-size:13px;color:#1E1E1E;margin-top:8px;">
+        ROI: <b style="color:#1E1E1E;">{fr_lo}–{fr_hi}%</b>
+      </div>
+      <div style="font-size:11px;color:#7b7b78;margin-top:10px;line-height:1.5;">
+        Комплексная трансформация по всем зонам
+      </div>
+    </div>
+
+  </div>
+</div>
+"""
+    return block
+
+
+def _build_services_section(selected_services: list[dict]) -> str:
+    """
+    Build the services block programmatically — 100% guaranteed to include
+    every service the user selected, regardless of LLM token limits.
+    Prepends an investment summary (min / full package) before the list.
+    """
+    if not selected_services:
+        return ""
+
+    summary = _build_package_summary(selected_services)
+
+    lines = [f"## Предлагаемые услуги\n", summary]
     for i, svc in enumerate(selected_services, 1):
         name   = svc.get("name", "—")
         desc   = svc.get("description", "—")
