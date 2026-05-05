@@ -263,43 +263,36 @@ def _bar_chart(zones: list[dict]) -> str:
         return ""
 
 
-def _risk_chart(top_risks: list[str]) -> str:
+def _risk_html(top_risks: list[str]) -> str:
+    """
+    HTML risk-priority block — replaces the old matplotlib chart.
+    Text is never clipped because HTML wraps naturally.
+    """
     if not top_risks:
         return ""
-    try:
-        labels = [f"Риск {i+1}" for i in range(len(top_risks[:5]))]
-        weights = list(range(len(labels), 0, -1))
-
-        fig, ax = plt.subplots(figsize=(6, max(1.8, len(labels) * 0.6)))
-        fig.patch.set_facecolor("white")
-        ax.set_facecolor("white")
-
-        colors = ["#E53935", "#FB8C00", "#FDD835", "#43A047", "#1E88E5"][:len(labels)]
-        bars = ax.barh(labels[::-1], weights[::-1], color=colors[::-1], height=0.5, zorder=2)
-        ax.set_xlim(0, max(weights) + 0.5)
-        ax.xaxis.grid(True, color="#E0DED8", linewidth=0.8, zorder=1)
-        ax.set_axisbelow(True)
-        ax.set_xticks([])
-
-        for bar, label, risk in zip(bars, labels[::-1], top_risks[:len(labels)][::-1]):
-            truncated = risk[:55] + "…" if len(risk) > 55 else risk
-            ax.text(0.15, bar.get_y() + bar.get_height() / 2,
-                    truncated, va="center", fontsize=9,
-                    color="white", fontweight="500", fontfamily="DejaVu Sans")
-
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.spines["left"].set_visible(False)
-        ax.spines["bottom"].set_color("#E0DED8")
-        ax.set_yticklabels([])
-        ax.tick_params(left=False)
-
-        plt.tight_layout()
-        return _fig_to_base64(fig)
-    except Exception as exc:
-        logger.warning("Risk chart generation failed.", exc_info=True)
-        log_agent_step("proposal_gen.risk_chart", "error", error=exc)
-        return ""
+    colors = ["#E53935", "#FB8C00", "#FDD835", "#8E24AA", "#1E88E5"]
+    labels = ["Критический", "Высокий", "Средний", "Умеренный", "Низкий"]
+    rows = ""
+    for i, risk in enumerate(top_risks[:5]):
+        color = colors[i]
+        label = labels[i]
+        rows += (
+            f'<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:10px;">'
+            f'<div style="min-width:28px;height:28px;border-radius:6px;background:{color};'
+            f'color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;'
+            f'justify-content:center;flex-shrink:0;">{i+1}</div>'
+            f'<div style="flex:1;">'
+            f'<span style="font-size:10px;font-weight:700;color:{color};text-transform:uppercase;'
+            f'letter-spacing:0.06em;">{label}</span>'
+            f'<div style="font-size:13px;color:#1E1E1E;line-height:1.55;margin-top:2px;">{risk}</div>'
+            f'</div></div>'
+        )
+    return (
+        f'<div class="chart-card chart-full">'
+        f'<h3>Приоритет рисков</h3>'
+        f'{rows}'
+        f'</div>'
+    )
 
 
 # ─── HTML renderer ────────────────────────────────────────────────────────────
@@ -324,7 +317,7 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None) 
 
         radar_b64 = _radar_chart(zones)
         bar_b64 = _bar_chart(zones)
-        risk_b64 = _risk_chart(top_risks)
+        risk_block = _risk_html(top_risks)  # HTML block — no text clipping
 
         if radar_b64 and bar_b64:
             charts_html = f"""
@@ -339,8 +332,8 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None) 
       <h3>Оценка по зонам</h3>
       <img src="data:image/png;base64,{bar_b64}" alt="Bar chart" style="width:100%;display:block;">
     </div>
+    {risk_block}
   </div>
-  {"<div class='chart-card chart-full'><h3>Приоритет рисков</h3><img src='data:image/png;base64," + risk_b64 + "' alt='Risk chart' style='width:100%;display:block;'></div>" if risk_b64 else ""}
 </div>
 """
 
