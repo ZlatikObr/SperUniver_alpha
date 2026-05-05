@@ -165,8 +165,12 @@ def _run_doc_benchmarks(profile: dict, doc_metrics: dict) -> str:
     """After extracting doc metrics, run targeted searches to contextualise them."""
     industry = profile.get("industry", "бизнес")
     metrics = doc_metrics.get("metrics", {}) if doc_metrics else {}
+    financial_analysis = doc_metrics.get("financial_analysis", {}) if doc_metrics else {}
     queries = []
-    for key in list(metrics.keys())[:5]:
+    metric_names = list(metrics.keys())
+    metric_names.extend(i.get("name", "") for i in financial_analysis.get("indicators", []))
+    metric_names.extend(r.get("name", "") for r in financial_analysis.get("ratios", []))
+    for key in metric_names[:8]:
         key_lower = key.lower()
         if any(w in key_lower for w in ("рентабельност", "маржа", "margin")):
             queries.append(f"рентабельность {industry} норма бенчмарк Россия {YEAR}")
@@ -231,10 +235,33 @@ def _build_user_message(
 
     if doc_metrics and doc_metrics.get("summary"):
         parts.append("\n## Данные из документа\n")
+        source_files = doc_metrics.get("source_files") or [doc_metrics.get("filename")]
+        source_files = [s for s in source_files if s]
+        if source_files:
+            parts.append(f"Файлы: {', '.join(source_files)}")
         if doc_metrics.get("metrics"):
             for k, v in list(doc_metrics["metrics"].items())[:15]:
                 parts.append(f"- {k}: {v}")
-        parts.append(f"\nТекст документа (фрагмент):\n{doc_metrics['summary'][:2000]}")
+        if doc_metrics.get("facts"):
+            parts.append("\nФакты и цитаты из файлов:")
+            for fact in doc_metrics.get("facts", [])[:12]:
+                parts.append(f"- {fact}")
+        financial_analysis = doc_metrics.get("financial_analysis") or {}
+        if financial_analysis.get("indicators") or financial_analysis.get("ratios"):
+            parts.append("\nФинансовый анализ по приложенным файлам:")
+            for indicator in financial_analysis.get("indicators", [])[:8]:
+                parts.append(
+                    f"- {indicator.get('name')}: {indicator.get('value')} "
+                    f"(факт: {indicator.get('fact', 'нет цитаты')})"
+                )
+            for ratio in financial_analysis.get("ratios", [])[:8]:
+                parts.append(
+                    f"- {ratio.get('name')}: {ratio.get('value')} — "
+                    f"{ratio.get('interpretation', '')}"
+                )
+            for risk in financial_analysis.get("risks", [])[:5]:
+                parts.append(f"- Финансовый риск: {risk}")
+        parts.append(f"\nТекст документа (фрагмент):\n{doc_metrics['summary'][:3500]}")
 
     if research_ctx:
         parts.append("\n## Данные внешнего ресёрча\n")
@@ -279,6 +306,132 @@ def _build_user_message(
         )
 
     return "\n".join(parts)
+
+
+def _doc_evidence_items(doc_metrics: dict | None) -> list[dict]:
+    if not doc_metrics:
+        return []
+    items = []
+    for quote in doc_metrics.get("quotes", [])[:12]:
+        if isinstance(quote, dict) and quote.get("text"):
+            items.append({
+                "source": quote.get("source") or doc_metrics.get("filename") or "файл",
+                "quote": quote["text"],
+            })
+    for fact in doc_metrics.get("facts", [])[:12]:
+        items.append({
+            "source": doc_metrics.get("filename") or "файл",
+            "quote": fact,
+        })
+    financial_analysis = doc_metrics.get("financial_analysis") or {}
+    for indicator in financial_analysis.get("indicators", [])[:8]:
+        fact = indicator.get("fact") or f"{indicator.get('name')}: {indicator.get('value')}"
+        items.append({
+            "source": indicator.get("source") or doc_metrics.get("filename") or "файл",
+            "quote": fact,
+        })
+    for ratio in financial_analysis.get("ratios", [])[:8]:
+        items.append({
+            "source": doc_metrics.get("filename") or "расчёт по файлу",
+            "quote": f"{ratio.get('name')}: {ratio.get('value')} — {ratio.get('interpretation', '')}",
+        })
+
+    seen = set()
+    unique = []
+    for item in items:
+        key = item["quote"].strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(item)
+    return unique[:20]
+
+
+def _zone_keywords(zone_name: str) -> tuple[str, ...]:
+    return {
+        "финансы": ("выруч", "приб", "убыт", "марж", "рентабель", "расход", "денеж", "cash", "дебитор", "кредитор", "ликвид"),
+        "операции": ("процесс", "операц", "ручн", "срок", "производ", "ошиб", "автомат"),
+        "маркетинг": ("клиент", "продаж", "конверс", "реклама", "cac", "ltv", "отток", "жалоб"),
+        "команда": ("сотрудник", "персонал", "команд", "штат", "текуч", "найм", "мотивац"),
+        "стратегия": ("стратег", "рынок", "конкур", "рост", "масштаб", "план", "инвест"),
+    }.get(zone_name.lower(), ())
+
+
+def _select_evidence(zone_name: str, evidence_items: list[dict], limit: int = 3) -> list[dict]:
+    keywords = _zone_keywords(zone_name)
+    selected = []
+    for item in evidence_items:
+        quote = item.get("quote", "").lower()
+        if any(keyword in quote for keyword in keywords):
+            selected.append(item)
+        if len(selected) >= limit:
+            break
+    if selected:
+        return selected
+    return evidence_items[:limit]
+
+
+def _risk_to_text(risk) -> str:
+    if isinstance(risk, dict):
+        return risk.get("risk") or risk.get("title") or risk.get("text") or str(risk)
+    return str(risk)
+
+
+def _ensure_assessment_evidence(result: dict, profile: dict, doc_metrics: dict | None) -> dict:
+    """Backfill explanations/evidence if the model returns the older compact schema."""
+    health = result.setdefault("health_assessment", {})
+    zones = health.get("zones") or []
+    evidence_items = _doc_evidence_items(doc_metrics)
+
+    for zone in zones:
+        zone_name = zone.get("name", "")
+        score = zone.get("score", 3)
+        risks = zone.get("risks") or []
+        growth = zone.get("growth_points") or []
+
+        if not zone.get("score_explanation"):
+            if risks:
+                zone["score_explanation"] = (
+                    f"Оценка {score}/5 поставлена из-за выявленных сигналов риска: "
+                    f"{'; '.join(map(str, risks[:2]))}."
+                )
+            elif growth:
+                zone["score_explanation"] = (
+                    f"Оценка {score}/5 отражает рабочее состояние зоны; основной потенциал роста: "
+                    f"{'; '.join(map(str, growth[:2]))}."
+                )
+            else:
+                zone["score_explanation"] = (
+                    f"Оценка {score}/5 основана на ответах диагностики и доступных данных по профилю "
+                    f"«{profile.get('industry', 'бизнес')}»."
+                )
+
+        if not zone.get("evidence"):
+            selected = _select_evidence(zone_name, evidence_items)
+            zone["evidence"] = [
+                {
+                    "source": item.get("source", "файл"),
+                    "quote": item.get("quote", ""),
+                    "implication": "Факт использован как подтверждение оценки зоны.",
+                }
+                for item in selected
+            ]
+
+    top_risks = health.get("top_risks") or []
+    if top_risks and not health.get("top_risk_details"):
+        health["top_risk_details"] = []
+        for i, risk in enumerate(top_risks[:3]):
+            evidence = evidence_items[i:i + 1] or evidence_items[:1]
+            health["top_risk_details"].append({
+                "risk": _risk_to_text(risk),
+                "why_critical": "Риск входит в топ приоритетов, потому что влияет на денежный поток, продажи или управляемость бизнеса.",
+                "evidence": evidence,
+            })
+
+    if doc_metrics and doc_metrics.get("financial_analysis"):
+        result["document_analysis"] = doc_metrics["financial_analysis"]
+        result["document_facts"] = doc_metrics.get("facts", [])[:20]
+
+    return result
 
 
 # ── LLM calls ─────────────────────────────────────────────────────────────────
@@ -481,10 +634,11 @@ def analyze_business(
 
     if result is None:
         log_agent_step("auditor.analyze_business", "fallback")
-        return _fallback_assessment(profile)
+        return _ensure_assessment_evidence(_fallback_assessment(profile), profile, doc_metrics)
 
     llm_sources = result.get("data_sources", [])
     result["data_sources"] = list(dict.fromkeys([*llm_sources, *data_sources]))
+    result = _ensure_assessment_evidence(result, profile, doc_metrics)
     log_agent_step("auditor.analyze_business", "success", data_sources=result["data_sources"])
     return result
 

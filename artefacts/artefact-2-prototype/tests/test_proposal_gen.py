@@ -27,8 +27,9 @@ def test_build_services_section_includes_all_selected():
     assert "Финансовый аудит" in section
     assert "Картирование процессов" in section
     assert "300%" in section and "400%" in section
-    # Проверяем, что есть нумерация
-    assert "1." in section and "2." in section
+    # Проверяем, что услуги собраны таблицей
+    assert "| Услуга | Задача | Методология |" in section
+    assert section.count("| Финансовый аудит |") == 1
 
 
 def test_fallback_proposal_is_complete_without_llm():
@@ -51,6 +52,7 @@ def test_fallback_proposal_is_complete_without_llm():
     assert "IT" in result
     assert "Аудит" in result
     assert "Финансы" in result.replace("ё", "е") or "финансы" in result.lower()
+    assert "Предлагаемые услуги" in result
 
 
 # ── Edge cases ────────────────────────────────────────────────────────────────
@@ -88,6 +90,16 @@ def test_simple_md_to_html_handles_nested_lists_and_bold():
     assert "<ul>" in html and "</ul>" in html
     assert "<strong>важный</strong>" in html
     assert "<strong>bold</strong>" in html
+
+
+def test_simple_md_to_html_renders_tables():
+    """Edge case: fallback markdown-рендерер сохраняет табличный блок услуг."""
+    md = "## Услуги\n\n| Услуга | ROI |\n|---|---:|\n| Аудит | 300% |"
+    html = pg._simple_md_to_html(md)
+
+    assert "<table>" in html
+    assert "<th>Услуга</th>" in html
+    assert "<td>Аудит</td>" in html
 
 
 # ── Negative ──────────────────────────────────────────────────────────────────

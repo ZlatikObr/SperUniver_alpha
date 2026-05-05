@@ -1,6 +1,7 @@
 """Generates proposal text, renders HTML with charts, exports PDF."""
 import io
 import base64
+import html as html_lib
 import logging
 from datetime import date
 
@@ -172,32 +173,167 @@ def _build_services_section(selected_services: list[dict]) -> str:
     """
     Build the services block programmatically — 100% guaranteed to include
     every service the user selected, regardless of LLM token limits.
-    Prepends an investment summary (min / full package) before the list.
+    Prepends an investment summary (min / full package) before the table.
     """
     if not selected_services:
         return ""
 
     summary = _build_package_summary(selected_services)
 
-    lines = [f"## Предлагаемые услуги\n", summary]
-    for i, svc in enumerate(selected_services, 1):
+    lines = [
+        "## Предлагаемые услуги",
+        "",
+        summary,
+        "",
+        "| Услуга | Задача | Методология | Ожидаемый результат | ROI / срок |",
+        "|---|---|---|---|---|",
+    ]
+    for svc in selected_services:
         name   = svc.get("name", "—")
         desc   = svc.get("description", "—")
         effect = svc.get("expected_effect", "—")
-        price  = svc.get("price_range", "—")
         dur    = svc.get("duration", "—")
         roi    = svc.get("roi_estimate", "—")
-        zone   = svc.get("zone", "—").capitalize()
+        price  = svc.get("price_range", "—")
+        methodology = _service_methodology(svc)
 
         lines.append(
-            f"### {i}. {name}\n"
-            f"**Зона:** {zone}  \n"
-            f"**Описание:** {desc}  \n"
-            f"**Ожидаемый эффект:** {effect}  \n"
-            f"**Стоимость:** {price} · **Срок:** {dur} · **ROI:** {roi}\n"
+            "| "
+            f"{_md_cell(name)} | "
+            f"{_md_cell(desc)} | "
+            f"{_md_cell(methodology)} | "
+            f"{_md_cell(effect)} | "
+            f"{_md_cell(f'{roi}; {dur}; {price}')} |"
         )
 
     return "\n".join(lines)
+
+
+def _md_cell(value: object) -> str:
+    return str(value or "—").replace("|", "\\|").replace("\n", " ").strip()
+
+
+def _service_methodology(svc: dict) -> str:
+    zone = (svc.get("zone") or "").lower()
+    tags = ", ".join(svc.get("tags", [])[:4])
+    base = {
+        "финансы": "Анализ P&L, cash-flow, баланса, план-факт отклонений и unit-экономики.",
+        "операции": "Картирование AS-IS/TO-BE, поиск узких мест, KPI и дорожная карта внедрения.",
+        "маркетинг": "Аудит воронки, каналов, CAC/LTV, конверсий и конкурентного позиционирования.",
+        "команда": "Интервью, оргдиагностика, оценка ролей, KPI, мотивации и управленческих ритмов.",
+        "стратегия": "SWOT/PESTLE, сценарное моделирование, приоритизация инициатив и план реализации.",
+    }.get(zone, "Диагностика текущего состояния, расчёт эффекта и план внедрения.")
+    return f"{base} Фокус: {tags}." if tags else base
+
+
+def _build_key_findings_section(assessment: dict) -> str:
+    health = assessment.get("health_assessment", {})
+    top_risks = health.get("top_risks", []) or []
+    details = health.get("top_risk_details", []) or []
+    if not top_risks and not details:
+        return ""
+
+    lines = ["## Ключевые выводы диагностики", ""]
+    risks_count = max(len(top_risks), len(details))
+    for idx in range(min(risks_count, 3)):
+        detail = details[idx] if idx < len(details) and isinstance(details[idx], dict) else {}
+        risk = detail.get("risk") or (top_risks[idx] if idx < len(top_risks) else "")
+        if isinstance(risk, dict):
+            risk = risk.get("risk") or risk.get("title") or str(risk)
+        why = detail.get("why_critical") or "Риск влияет на устойчивость, денежный поток и управляемость бизнеса."
+        evidence = _format_evidence(detail.get("evidence", []))
+        lines.append(f"### {idx + 1}. {risk}")
+        lines.append(f"{why}")
+        if evidence:
+            lines.append(f"**Факты/цитаты:** {evidence}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _build_financial_analysis_section(assessment: dict) -> str:
+    analysis = assessment.get("document_analysis") or {}
+    if not any(analysis.get(key) for key in ("indicators", "ratios", "risks", "summary")):
+        return ""
+
+    lines = ["## Финансовый анализ по приложенным файлам", ""]
+    if analysis.get("summary"):
+        lines.append(analysis["summary"])
+        lines.append("")
+
+    if analysis.get("indicators"):
+        lines.extend([
+            "| Показатель | Значение | Основание |",
+            "|---|---:|---|",
+        ])
+        for item in analysis["indicators"][:10]:
+            lines.append(
+                f"| {_md_cell(item.get('name'))} | {_md_cell(item.get('value'))} | {_md_cell(item.get('fact', item.get('source', 'файл')))} |"
+            )
+        lines.append("")
+
+    if analysis.get("ratios"):
+        lines.extend([
+            "| Коэффициент | Значение | Интерпретация |",
+            "|---|---:|---|",
+        ])
+        for item in analysis["ratios"][:8]:
+            lines.append(
+                f"| {_md_cell(item.get('name'))} | {_md_cell(item.get('value'))} | {_md_cell(item.get('interpretation'))} |"
+            )
+        lines.append("")
+
+    if analysis.get("risks"):
+        lines.append("**Финансовые риски:**")
+        for risk in analysis["risks"][:6]:
+            lines.append(f"- {risk}")
+
+    return "\n".join(lines).strip()
+
+
+def _build_zone_evidence_section(assessment: dict) -> str:
+    zones = assessment.get("health_assessment", {}).get("zones", []) or []
+    if not zones:
+        return ""
+
+    lines = [
+        "## Почему такие оценки по зонам",
+        "",
+        "| Зона | Оценка | Объяснение | Факты/цитаты |",
+        "|---|---:|---|---|",
+    ]
+    for zone in zones:
+        name = ZONE_RU.get(zone.get("name"), str(zone.get("name", "—")).capitalize())
+        score = zone.get("score", "—")
+        explanation = zone.get("score_explanation") or _default_zone_explanation(zone)
+        evidence = _format_evidence(zone.get("evidence", [])) or "Данные диагностики без отдельной цитаты."
+        lines.append(f"| {_md_cell(name)} | {_md_cell(f'{score}/5')} | {_md_cell(explanation)} | {_md_cell(evidence)} |")
+    return "\n".join(lines)
+
+
+def _default_zone_explanation(zone: dict) -> str:
+    score = zone.get("score", "—")
+    risks = zone.get("risks", [])
+    growth = zone.get("growth_points", [])
+    if risks:
+        return f"Оценка {score}/5 связана с рисками: {'; '.join(map(str, risks[:2]))}."
+    if growth:
+        return f"Оценка {score}/5: зона стабильна, но есть точки роста: {'; '.join(map(str, growth[:2]))}."
+    return f"Оценка {score}/5 поставлена по результатам диагностики."
+
+
+def _format_evidence(evidence_items: list) -> str:
+    if not evidence_items:
+        return ""
+    formatted = []
+    for item in evidence_items[:3]:
+        if isinstance(item, dict):
+            source = item.get("source", "данные")
+            quote = item.get("quote") or item.get("fact") or item.get("text") or ""
+            if quote:
+                formatted.append(f"{source}: «{quote}»")
+        elif item:
+            formatted.append(str(item))
+    return "; ".join(formatted)
 
 
 def generate_proposal_text(
@@ -234,6 +370,21 @@ def generate_proposal_text(
 
     top_risks = "\n".join(f"- {r}" for r in health.get("top_risks", []))
     n_services = len(selected_services)
+    zone_evidence_text = ""
+    for z in health.get("zones", []):
+        evidence = _format_evidence(z.get("evidence", []))
+        explanation = z.get("score_explanation", "")
+        if evidence or explanation:
+            zone_evidence_text += (
+                f"- **{z.get('name', '').capitalize()}**: {explanation} "
+                f"Факты: {evidence}\n"
+            )
+    financial_context = ""
+    doc_analysis = assessment.get("document_analysis") or {}
+    if doc_analysis.get("summary"):
+        financial_context += doc_analysis["summary"] + "\n"
+    for ratio in doc_analysis.get("ratios", [])[:6]:
+        financial_context += f"- {ratio.get('name')}: {ratio.get('value')} — {ratio.get('interpretation', '')}\n"
 
     # LLM prompt: narrative only — no services enumeration
     user_message = f"""
@@ -250,17 +401,22 @@ def generate_proposal_text(
 ## Топ-3 риска
 {top_risks}
 
-Клиент выбрал {n_services} услуг (они будут добавлены в КП отдельным блоком автоматически — тебе перечислять их НЕ нужно).
+## Объяснения и доказательства по зонам
+{zone_evidence_text or "Нет отдельных доказательств."}
+
+## Финансовый контекст из приложенных файлов
+{financial_context or "Файл не приложен или финансовые коэффициенты не рассчитаны."}
+
+Клиент выбрал {n_services} услуг (они будут добавлены в КП отдельной таблицей автоматически — тебе перечислять их НЕ нужно).
 
 Сформируй в Markdown только следующие разделы КП:
 1. Заголовок и краткое резюме (2–3 абзаца о ситуации клиента и ценности работы с нами)
-2. Результаты диагностики (по зонам)
-3. Ключевые риски и приоритеты
-4. Стратегические рекомендации (3–5 пунктов)
-5. Следующие шаги (как начать работу)
-6. Почему мы (короткий блок доверия)
+2. Стратегические рекомендации (3–5 пунктов, с опорой на факты диагностики)
+3. Общий ожидаемый эффект (с числовой логикой, без выдуманных исходных данных)
+4. Следующие шаги (как начать работу)
+5. Почему мы (короткий блок доверия)
 
-НЕ добавляй раздел со списком услуг — он будет вставлен автоматически.
+НЕ добавляй разделы «Ключевые выводы диагностики», «Финансовый анализ», «Почему такие оценки по зонам» и список услуг — они будут вставлены автоматически.
 """
 
     try:
@@ -281,10 +437,22 @@ def generate_proposal_text(
     if not narrative:
         narrative = _fallback_narrative(profile, health)
 
-    # Append the services section built by code — always complete
+    # Append deterministic sections built by code — always complete
+    findings_section = _build_key_findings_section(assessment)
+    financial_section = _build_financial_analysis_section(assessment)
+    zone_section = _build_zone_evidence_section(assessment)
     services_section = _build_services_section(selected_services)
 
-    result = narrative + "\n\n" + services_section
+    result = "\n\n".join(
+        section for section in (
+            narrative,
+            findings_section,
+            financial_section,
+            zone_section,
+            services_section,
+        )
+        if section
+    )
     log_agent_step("proposal_gen.generate_proposal_text", "success", output_chars=len(result))
     return result
 
@@ -312,7 +480,16 @@ def _fallback_proposal(profile: dict, health: dict, services: list[dict]) -> str
     """Full fallback КП (used from app.py except-block)."""
     narrative = _fallback_narrative(profile, health)
     services_section = _build_services_section(services)
-    return narrative + "\n\n" + services_section
+    assessment = {"health_assessment": health}
+    return "\n\n".join(
+        section for section in (
+            narrative,
+            _build_key_findings_section(assessment),
+            _build_zone_evidence_section(assessment),
+            services_section,
+        )
+        if section
+    )
 
 
 # ─── Chart generators ─────────────────────────────────────────────────────────
@@ -422,6 +599,7 @@ def _risk_html(top_risks: list[str]) -> str:
     for i, risk in enumerate(top_risks[:5]):
         color = colors[i]
         label = labels[i]
+        risk_text = html_lib.escape(_risk_display_text(risk))
         rows += (
             f'<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:10px;">'
             f'<div style="min-width:28px;height:28px;border-radius:6px;background:{color};'
@@ -430,7 +608,7 @@ def _risk_html(top_risks: list[str]) -> str:
             f'<div style="flex:1;">'
             f'<span style="font-size:10px;font-weight:700;color:{color};text-transform:uppercase;'
             f'letter-spacing:0.06em;">{label}</span>'
-            f'<div style="font-size:13px;color:#1E1E1E;line-height:1.55;margin-top:2px;">{risk}</div>'
+            f'<div style="font-size:13px;color:#1E1E1E;line-height:1.55;margin-top:2px;">{risk_text}</div>'
             f'</div></div>'
         )
     return (
@@ -438,6 +616,53 @@ def _risk_html(top_risks: list[str]) -> str:
         f'<h3>Приоритет рисков</h3>'
         f'{rows}'
         f'</div>'
+    )
+
+
+def _risk_display_text(risk) -> str:
+    if isinstance(risk, dict):
+        return risk.get("risk") or risk.get("title") or risk.get("text") or str(risk)
+    return str(risk)
+
+
+def _risk_list_html(top_risks: list) -> str:
+    if not top_risks:
+        return ""
+    items = []
+    for i, risk in enumerate(top_risks[:5], 1):
+        items.append(
+            "<li>"
+            f"<span class='risk-num'>{i}</span>"
+            f"<span>{html_lib.escape(_risk_display_text(risk))}</span>"
+            "</li>"
+        )
+    return f"<ol class='risk-list'>{''.join(items)}</ol>"
+
+
+def _zone_explanations_html(zones: list[dict]) -> str:
+    rows = []
+    for zone in zones:
+        explanation = zone.get("score_explanation") or _default_zone_explanation(zone)
+        evidence = _format_evidence(zone.get("evidence", []))
+        if not explanation and not evidence:
+            continue
+        name = ZONE_RU.get(zone.get("name"), str(zone.get("name", "—")).capitalize())
+        rows.append(
+            "<tr>"
+            f"<td>{html_lib.escape(name)}</td>"
+            f"<td>{html_lib.escape(str(zone.get('score', '—')))}/5</td>"
+            f"<td>{html_lib.escape(explanation)}</td>"
+            f"<td>{html_lib.escape(evidence or 'Данные диагностики')}</td>"
+            "</tr>"
+        )
+    if not rows:
+        return ""
+    return (
+        "<div class='zone-evidence'>"
+        "<h3>Почему такие оценки</h3>"
+        "<table><thead><tr><th>Зона</th><th>Оценка</th><th>Объяснение</th><th>Факты/цитаты</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+        "</div>"
     )
 
 
@@ -464,6 +689,7 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None) 
         radar_b64 = _radar_chart(zones)
         bar_b64 = _bar_chart(zones)
         risk_block = _risk_html(top_risks)  # HTML block — no text clipping
+        zone_explanations = _zone_explanations_html(zones)
 
         if radar_b64 and bar_b64:
             charts_html = f"""
@@ -480,6 +706,7 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None) 
     </div>
     {risk_block}
   </div>
+  {zone_explanations}
 </div>
 """
 
@@ -498,7 +725,7 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None) 
   /* Header */
   .header {{ display: flex; justify-content: space-between; align-items: flex-start;
              border-bottom: 2px solid #FF5600; padding-bottom: 24px; margin-bottom: 36px; }}
-  .brand {{ font-size: 22px; font-weight: 800; letter-spacing: -0.5px; color: #1E1E1E; }}
+  .brand {{ font-size: 22px; font-weight: 800; letter-spacing: 0; color: #1E1E1E; }}
   .brand-dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%;
                 background: #FF5600; margin-left: 4px; margin-bottom: 2px; }}
   .brand-sub {{ font-size: 11px; color: #7b7b78; letter-spacing: 0.06em; margin-top: 3px; }}
@@ -515,18 +742,25 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None) 
   strong {{ color: #1E1E1E; font-weight: 600; }}
 
   /* Tables */
-  table {{ width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 13px; }}
+  table {{ width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 12px; table-layout: fixed; }}
   th {{ background: #1E1E1E; color: #fff; padding: 10px 14px; text-align: left; font-weight: 600; }}
-  td {{ padding: 10px 14px; border-bottom: 1px solid #E0DED8; }}
+  td {{ padding: 10px 14px; border-bottom: 1px solid #E0DED8; vertical-align: top; overflow-wrap: anywhere; }}
   tr:nth-child(even) td {{ background: #F7F7F5; }}
 
   /* Charts */
   .charts-section {{ margin: 32px 0; }}
   .charts-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px; }}
-  .chart-card {{ background: #F7F7F5; border: 1px solid #E0DED8; border-radius: 10px; padding: 20px; }}
+  .chart-card {{ background: #F7F7F5; border: 1px solid #E0DED8; border-radius: 8px; padding: 20px; }}
   .chart-card h3 {{ font-size: 13px; color: #7b7b78; font-weight: 600;
                     text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 14px; }}
   .chart-full {{ grid-column: 1 / -1; }}
+  .risk-list {{ list-style: none; padding-left: 0; margin: 12px 0 0; }}
+  .risk-list li {{ display: flex; gap: 10px; align-items: flex-start; margin-bottom: 8px;
+                   color: #1E1E1E; line-height: 1.55; }}
+  .risk-num {{ flex: 0 0 auto; min-width: 22px; height: 22px; border-radius: 4px;
+               background: #FF5600; color: #fff; font-size: 11px; font-weight: 700;
+               display: inline-flex; align-items: center; justify-content: center; }}
+  .zone-evidence {{ margin-top: 18px; }}
 
   /* Highlight box */
   .highlight {{ background: #FFF3EE; border-left: 3px solid #FF5600;
@@ -605,42 +839,86 @@ def _simple_md_to_html(text: str) -> str:
     lines = text.split("\n")
     html_parts = []
     in_list = False
+    i = 0
 
-    for line in lines:
+    def close_list():
+        nonlocal in_list
+        if in_list:
+            html_parts.append("</ul>")
+            in_list = False
+
+    while i < len(lines):
+        line = lines[i]
+        if line.strip().startswith("|") and i + 1 < len(lines) and re.match(r"^\s*\|?\s*:?-{3,}", lines[i + 1]):
+            close_list()
+            headers = _split_md_table_row(line)
+            i += 2
+            rows = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                rows.append(_split_md_table_row(lines[i]))
+                i += 1
+            html_parts.append("<table><thead><tr>")
+            for header in headers:
+                html_parts.append(f"<th>{_inline_md_to_html(header)}</th>")
+            html_parts.append("</tr></thead><tbody>")
+            for row in rows:
+                html_parts.append("<tr>")
+                for cell in row[:len(headers)]:
+                    html_parts.append(f"<td>{_inline_md_to_html(cell)}</td>")
+                html_parts.append("</tr>")
+            html_parts.append("</tbody></table>")
+            continue
+
         if line.startswith("### "):
-            if in_list:
-                html_parts.append("</ul>")
-                in_list = False
+            close_list()
             html_parts.append(f"<h3>{line[4:]}</h3>")
         elif line.startswith("## "):
-            if in_list:
-                html_parts.append("</ul>")
-                in_list = False
+            close_list()
             html_parts.append(f"<h2>{line[3:]}</h2>")
         elif line.startswith("# "):
-            if in_list:
-                html_parts.append("</ul>")
-                in_list = False
+            close_list()
             html_parts.append(f"<h1>{line[2:]}</h1>")
         elif line.startswith("- ") or line.startswith("* "):
             if not in_list:
                 html_parts.append("<ul>")
                 in_list = True
-            item = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line[2:])
+            item = _inline_md_to_html(line[2:])
             html_parts.append(f"<li>{item}</li>")
         elif line.strip() == "":
-            if in_list:
-                html_parts.append("</ul>")
-                in_list = False
+            close_list()
             html_parts.append("<br>")
         else:
-            if in_list:
-                html_parts.append("</ul>")
-                in_list = False
-            line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
-            html_parts.append(f"<p>{line}</p>")
+            close_list()
+            html_parts.append(f"<p>{_inline_md_to_html(line)}</p>")
+        i += 1
 
     if in_list:
         html_parts.append("</ul>")
 
     return "\n".join(html_parts)
+
+
+def _split_md_table_row(line: str) -> list[str]:
+    stripped = line.strip().strip("|")
+    cells = []
+    current = []
+    escaped = False
+    for char in stripped:
+        if char == "\\" and not escaped:
+            escaped = True
+            continue
+        if char == "|" and not escaped:
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+        escaped = False
+    cells.append("".join(current).strip())
+    return cells
+
+
+def _inline_md_to_html(text: str) -> str:
+    import re
+
+    escaped = html_lib.escape(str(text or ""))
+    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)

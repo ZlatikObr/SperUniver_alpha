@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from openai import OpenAI
 from backend.survey import get_base_questions, generate_followup_questions, build_business_profile
-from backend.document_parser import parse_document
+from backend.document_parser import parse_document, merge_document_results
 from backend.auditor import analyze_business
 from backend.catalog import load_catalog, filter_services, get_services_by_ids
 from backend.agent_logger import log_agent_step
@@ -248,6 +248,7 @@ def _init_state():
         "followup_questions": [],
         "followup_answers": {},
         "doc_result": None,
+        "doc_warnings": [],
         "business_profile": {},
         "assessment": {},
         "catalog_services": [],
@@ -482,14 +483,15 @@ def page_document():
     st.markdown(
         '<h2 style="font-size:22px;font-weight:700;color:#1E1E1E;margin-bottom:4px;">Финансовые данные</h2>'
         '<p style="font-size:13px;color:#7b7b78;margin-bottom:1.5rem;">'
-        'Прикрепите отчётность для более точного анализа — PDF, CSV или Excel.</p>',
+        'Прикрепите отчётность для более точного анализа — можно загрузить несколько PDF, CSV или Excel.</p>',
         unsafe_allow_html=True,
     )
 
-    uploaded = st.file_uploader(
+    uploaded_files = st.file_uploader(
         "file",
         type=["pdf", "csv", "xlsx", "xls"],
         label_visibility="collapsed",
+        accept_multiple_files=True,
     )
 
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
@@ -497,7 +499,7 @@ def page_document():
     with col1:
         skip = st.button("Пропустить", use_container_width=True)
     with col2:
-        proceed = st.button("Продолжить →", use_container_width=True, type="primary", disabled=uploaded is None)
+        proceed = st.button("Продолжить →", use_container_width=True, type="primary", disabled=not uploaded_files)
 
     st.markdown(
         '<p style="font-size:11px;color:#C3C2BD;margin-top:10px;">'
@@ -507,17 +509,25 @@ def page_document():
 
     if skip:
         st.session_state.doc_result = None
+        st.session_state.doc_warnings = []
         st.session_state.last_doc_error = ""
         _go("analyzing")
 
-    if proceed and uploaded:
-        with st.spinner("Обрабатываю документ..."):
-            doc_result = parse_document(uploaded.read(), uploaded.name)
-        if doc_result.get("error"):
+    if proceed and uploaded_files:
+        parsed_results = []
+        with st.spinner("Обрабатываю документы и извлекаю финансовые показатели..."):
+            for uploaded in uploaded_files:
+                parsed_results.append(parse_document(uploaded.read(), uploaded.name))
+
+        valid_results = [r for r in parsed_results if not r.get("error")]
+        if not valid_results:
+            first_error = parsed_results[0]["error"] if parsed_results else "Не удалось обработать файлы."
             st.session_state.doc_result = None
-            st.session_state.last_doc_error = doc_result["error"]
+            st.session_state.doc_warnings = []
+            st.session_state.last_doc_error = first_error
         else:
-            st.session_state.doc_result = doc_result
+            st.session_state.doc_result = merge_document_results(parsed_results)
+            st.session_state.doc_warnings = st.session_state.doc_result.get("errors", [])
             st.session_state.last_doc_error = ""
             _go("analyzing")
 
@@ -525,6 +535,7 @@ def page_document():
         st.warning(st.session_state.last_doc_error)
         if st.button("Продолжить без документа", key="continue_without_document"):
             st.session_state.doc_result = None
+            st.session_state.doc_warnings = []
             st.session_state.last_doc_error = ""
             _go("analyzing")
 
@@ -616,6 +627,26 @@ def page_diagnostics():
     if assessment.get("_partial"):
         st.warning("Частичная диагностика: для полного анализа ответьте на все вопросы.")
 
+    if st.session_state.get("doc_warnings"):
+        st.warning("Часть файлов не удалось обработать: " + " · ".join(st.session_state.doc_warnings))
+
+    doc_result = st.session_state.get("doc_result")
+    if doc_result and doc_result.get("financial_analysis"):
+        analysis = doc_result.get("financial_analysis", {})
+        files = ", ".join(doc_result.get("source_files", [])) or doc_result.get("filename", "файл")
+        _section("ДАННЫЕ ИЗ ФАЙЛОВ")
+        with st.expander(f"Финансовые показатели и факты из файлов: {files}", expanded=False):
+            if analysis.get("summary"):
+                st.markdown(analysis["summary"])
+            if analysis.get("ratios"):
+                st.markdown("**Коэффициенты**")
+                for ratio in analysis["ratios"][:6]:
+                    st.markdown(f"- **{ratio.get('name')}**: {ratio.get('value')} — {ratio.get('interpretation', '')}")
+            if doc_result.get("facts"):
+                st.markdown("**Факты/цитаты**")
+                for fact in doc_result["facts"][:8]:
+                    st.markdown(f"— {fact}")
+
     _section("ОЦЕНКА ПО ЗОНАМ")
     zones = health.get("zones", [])
     if zones:
@@ -633,6 +664,21 @@ def page_diagnostics():
                     f'<div style="height:4px;width:{score*20}%;background:{color};border-radius:4px;"></div></div>',
                     unsafe_allow_html=True,
                 )
+                if zone.get("score_explanation"):
+                    st.markdown(f"**Почему такая оценка:** {zone['score_explanation']}")
+                if zone.get("evidence"):
+                    st.markdown(
+                        '<p style="font-size:11px;font-weight:700;color:#7b7b78;letter-spacing:0.06em;margin:12px 0 6px;">ФАКТЫ / ЦИТАТЫ</p>',
+                        unsafe_allow_html=True,
+                    )
+                    for item in zone.get("evidence", [])[:4]:
+                        if isinstance(item, dict):
+                            quote = item.get("quote", "")
+                            source = item.get("source", "данные")
+                            implication = item.get("implication", "")
+                            st.markdown(f"> {quote}\n\nИсточник: {source}. {implication}".strip())
+                        else:
+                            st.markdown(f"> {item}")
                 if risks:
                     st.markdown(
                         '<p style="font-size:11px;font-weight:700;color:#7b7b78;letter-spacing:0.06em;margin-bottom:6px;">РИСКИ</p>',
