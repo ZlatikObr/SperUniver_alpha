@@ -1,10 +1,12 @@
-import json
-import yaml
-from pathlib import Path
-
 from openai import OpenAI
 
-MODEL = "gpt-4o-mini"
+from ._config import MODEL
+from ._utils import (
+    extract_json_array as _extract_json_array,
+    extract_json_object as _extract_json_object,
+    load_prompt as _load_prompt,
+)
+from .agent_logger import log_agent_step
 
 BASE_QUESTIONS = [
     {
@@ -95,66 +97,41 @@ BASE_QUESTIONS = [
 ]
 
 
-_ROOT = Path(__file__).parent.parent  # repo root
-
-
-def _load_prompt(name: str) -> dict:
-    path = _ROOT / "prompts" / f"{name}.yaml"
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def _extract_json_array(text: str) -> list | None:
-    start = text.find("[")
-    end = text.rfind("]") + 1
-    if start >= 0 and end > start:
-        try:
-            return json.loads(text[start:end])
-        except json.JSONDecodeError:
-            pass
-    return None
-
-
-def _extract_json_object(text: str) -> dict | None:
-    start = text.find("{")
-    end = text.rfind("}") + 1
-    if start >= 0 and end > start:
-        try:
-            return json.loads(text[start:end])
-        except json.JSONDecodeError:
-            pass
-    return None
-
-
 def get_base_questions() -> list[dict]:
     return BASE_QUESTIONS
 
 
 def generate_followup_questions(answers: dict, client: OpenAI) -> list[dict]:
+    log_agent_step("survey.generate_followup_questions", "start", answer_count=len(answers))
     prompt = _load_prompt("survey_v1")
     answers_text = "\n".join(f"— {k}: {v}" for k, v in answers.items())
 
-    response = client.chat.completions.create(
-        model=MODEL,
-        max_tokens=700,
-        messages=[
-            {"role": "system", "content": prompt["system"]},
-            {
-                "role": "user",
-                "content": (
-                    "Ответы клиента на базовые вопросы:\n"
-                    f"{answers_text}\n\n"
-                    "Сгенерируй ровно 3 уточняющих вопроса в формате JSON-массива."
-                )
-            }
-        ]
-    )
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            max_tokens=700,
+            messages=[
+                {"role": "system", "content": prompt["system"]},
+                {
+                    "role": "user",
+                    "content": (
+                        "Ответы клиента на базовые вопросы:\n"
+                        f"{answers_text}\n\n"
+                        "Сгенерируй ровно 3 уточняющих вопроса в формате JSON-массива."
+                    )
+                }
+            ]
+        )
 
-    raw = response.choices[0].message.content or ""
-    result = _extract_json_array(raw)
-    if result:
-        return result
+        raw = response.choices[0].message.content or ""
+        result = _extract_json_array(raw)
+        if result:
+            log_agent_step("survey.generate_followup_questions", "success", question_count=len(result))
+            return result
+    except Exception as exc:
+        log_agent_step("survey.generate_followup_questions", "error", error=exc)
 
+    log_agent_step("survey.generate_followup_questions", "fallback")
     return [
         {"id": "followup_1", "text": "Какой результат вы ожидаете получить от работы с консультантом?", "type": "text"},
         {"id": "followup_2", "text": "Какие попытки решить проблему вы уже предпринимали?", "type": "text"},
@@ -164,28 +141,40 @@ def generate_followup_questions(answers: dict, client: OpenAI) -> list[dict]:
 
 
 def build_business_profile(base_answers: dict, followup_answers: dict, client: OpenAI) -> dict:
+    log_agent_step(
+        "survey.build_business_profile",
+        "start",
+        base_answer_count=len(base_answers),
+        followup_answer_count=len(followup_answers),
+    )
     all_answers = {**base_answers, **followup_answers}
     answers_text = "\n".join(f"— {k}: {v}" for k, v in all_answers.items())
 
     prompt = _load_prompt("survey_v1")
 
-    response = client.chat.completions.create(
-        model=MODEL,
-        max_tokens=600,
-        messages=[
-            {"role": "system", "content": prompt["profile_system"]},
-            {
-                "role": "user",
-                "content": f"Создай структурированный JSON-профиль бизнеса на основе ответов:\n\n{answers_text}"
-            }
-        ]
-    )
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            max_tokens=600,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": prompt["profile_system"]},
+                {
+                    "role": "user",
+                    "content": f"Создай структурированный JSON-профиль бизнеса на основе ответов:\n\n{answers_text}"
+                }
+            ]
+        )
 
-    raw = response.choices[0].message.content or ""
-    result = _extract_json_object(raw)
-    if result:
-        return result
+        raw = response.choices[0].message.content or ""
+        result = _extract_json_object(raw)
+        if result:
+            log_agent_step("survey.build_business_profile", "success", fields=list(result.keys()))
+            return result
+    except Exception as exc:
+        log_agent_step("survey.build_business_profile", "error", error=exc)
 
+    log_agent_step("survey.build_business_profile", "fallback")
     return {
         "industry": base_answers.get("industry", "Не указано"),
         "region": base_answers.get("region", "Не указано"),

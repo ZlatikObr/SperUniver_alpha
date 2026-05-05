@@ -8,15 +8,19 @@ Research pipeline (all pre-computed before LLM call, run in parallel):
   5. Two-phase macro/micro research chain
 """
 import json
-import yaml
+import logging
 import requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from pathlib import Path
 
 from openai import OpenAI
 
-MODEL = "gpt-4o-mini"
+from ._config import MODEL
+from ._utils import extract_json_object as _extract_json_object, load_prompt as _load_prompt
+from .agent_logger import log_agent_step
+
+logger = logging.getLogger(__name__)
+
 YEAR = datetime.now().year
 
 # Kept for fallback compatibility only
@@ -41,26 +45,6 @@ WEB_SEARCH_TOOL = {
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-_ROOT = Path(__file__).parent.parent  # repo root
-
-
-def _load_prompt(name: str) -> dict:
-    path = _ROOT / "prompts" / f"{name}.yaml"
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def _extract_json_object(text: str) -> dict | None:
-    start = text.find("{")
-    end = text.rfind("}") + 1
-    if start >= 0 and end > start:
-        try:
-            return json.loads(text[start:end])
-        except json.JSONDecodeError:
-            pass
-    return None
-
-
 def _web_search(query: str) -> str:
     """DuckDuckGo search — returns formatted snippet text or error string."""
     try:
@@ -73,6 +57,8 @@ def _web_search(query: str) -> str:
             f"**{r.get('title', '')}**\n{r.get('body', '')}" for r in results
         )
     except Exception as e:
+        logger.warning("DuckDuckGo search failed for query: %s", query, exc_info=True)
+        log_agent_step("auditor.web_search", "error", query=query, error=e)
         return f"Поиск недоступен: {e}"
 
 
@@ -112,7 +98,7 @@ def _fetch_hh_data(profile: dict) -> dict:
                 "per_page": 20,
                 "only_with_salary": True,
             },
-            headers={"User-Agent": "Revizor/1.0 (business-audit-tool)"},
+            headers={"User-Agent": "Puls/1.0 (business-audit-tool)"},
             timeout=7,
         )
         if r.status_code != 200:
@@ -131,7 +117,9 @@ def _fetch_hh_data(profile: dict) -> dict:
         if salaries:
             result["avg_salary_rub"] = int(sum(salaries) / len(salaries))
         return result
-    except Exception:
+    except Exception as exc:
+        logger.warning("hh.ru data fetch failed.", exc_info=True)
+        log_agent_step("auditor.fetch_hh_data", "error", error=exc)
         return {}
 
 
@@ -146,7 +134,9 @@ def _fetch_cbr_rate() -> str:
             if "%" in line and any(w in line.lower() for w in ("ставк", "цб", "банк")):
                 return line.strip()[:200]
         return snippet[:200]
-    except Exception:
+    except Exception as exc:
+        logger.warning("CBR key rate fetch failed.", exc_info=True)
+        log_agent_step("auditor.fetch_cbr_rate", "error", error=exc)
         return ""
 
 
@@ -203,7 +193,6 @@ def _run_phase2_micro(profile: dict) -> str:
     """Phase 2 — micro: targeted query based on client's main pain point."""
     challenge = (
         profile.get("main_challenge")
-        or profile.get("боль")
         or profile.get("challenge")
         or ""
     )
@@ -299,6 +288,7 @@ def _call_llm_direct(system: str, user_content: str, client: OpenAI) -> dict | N
     response = client.chat.completions.create(
         model=MODEL,
         max_tokens=1800,
+        response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user_content},
@@ -333,7 +323,12 @@ def _run_with_tools(system: str, user_content: str, client: OpenAI) -> dict | No
             })
             for tc in tool_calls:
                 if tc.function.name == "web_search":
-                    args = json.loads(tc.function.arguments)
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError as exc:
+                        logger.warning("Invalid web_search tool arguments.", exc_info=True)
+                        log_agent_step("auditor.tool_args", "error", error=exc)
+                        args = {}
                     search_result = _web_search(args.get("query", ""))
                     messages.append({
                         "role": "tool",
@@ -355,13 +350,21 @@ def analyze_business(
     on_progress=None,           # optional callback(str) for UI progress updates
 ) -> dict:
     """Run full research pipeline (parallel) then call LLM for 5-zone audit."""
+    log_agent_step(
+        "auditor.analyze_business",
+        "start",
+        answer_count=answer_count,
+        has_doc=bool(doc_metrics and doc_metrics.get("summary")),
+        industry=profile.get("industry"),
+    )
 
     def _notify(msg: str):
         if on_progress:
             try:
                 on_progress(msg)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Progress callback failed.", exc_info=True)
+                log_agent_step("auditor.progress_callback", "error", error=exc)
 
     if answer_count < 5:
         return _partial_assessment(profile)
@@ -383,7 +386,7 @@ def analyze_business(
     doc_benchmarks: str = ""
 
     try:
-        with ThreadPoolExecutor(max_workers=5) as ex:
+        with ThreadPoolExecutor(max_workers=2) as ex:
             zone_futs = {zone: ex.submit(_web_search, q) for zone, q in zone_queries.items()}
             hh_fut    = ex.submit(_fetch_hh_data, profile)
             cbr_fut   = ex.submit(_fetch_cbr_rate)
@@ -395,43 +398,57 @@ def analyze_business(
             for zone, f in zone_futs.items():
                 try:
                     zone_benchmarks[zone] = f.result(timeout=20)
-                except Exception:
+                except Exception as exc:
+                    logger.warning("Zone benchmark failed for %s.", zone, exc_info=True)
+                    log_agent_step("auditor.zone_benchmark", "error", zone=zone, error=exc)
                     zone_benchmarks[zone] = ""
 
             try:
                 hh_data = hh_fut.result(timeout=10)
-            except Exception:
+            except Exception as exc:
+                logger.warning("hh.ru future failed.", exc_info=True)
+                log_agent_step("auditor.hh_future", "error", error=exc)
                 hh_data = {}
 
             try:
                 cbr = cbr_fut.result(timeout=10)
-            except Exception:
+            except Exception as exc:
+                logger.warning("CBR future failed.", exc_info=True)
+                log_agent_step("auditor.cbr_future", "error", error=exc)
                 cbr = ""
 
             try:
                 competitors = comp_fut.result(timeout=20)
-            except Exception:
+            except Exception as exc:
+                logger.warning("Competitor research failed.", exc_info=True)
+                log_agent_step("auditor.competitors", "error", error=exc)
                 competitors = ""
 
             try:
                 macro = mac_fut.result(timeout=20)
-            except Exception:
+            except Exception as exc:
+                logger.warning("Macro research failed.", exc_info=True)
+                log_agent_step("auditor.macro", "error", error=exc)
                 macro = ""
 
             try:
                 micro = mic_fut.result(timeout=15)
-            except Exception:
+            except Exception as exc:
+                logger.warning("Micro research failed.", exc_info=True)
+                log_agent_step("auditor.micro", "error", error=exc)
                 micro = ""
 
             if doc_fut:
                 try:
                     doc_benchmarks = doc_fut.result(timeout=15)
-                except Exception:
+                except Exception as exc:
+                    logger.warning("Document benchmark research failed.", exc_info=True)
+                    log_agent_step("auditor.doc_benchmarks", "error", error=exc)
                     doc_benchmarks = ""
 
-    except Exception:
-        # If ThreadPoolExecutor itself fails — continue with empty research context
-        pass
+    except Exception as exc:
+        logger.warning("Research pipeline failed; continuing with empty context.", exc_info=True)
+        log_agent_step("auditor.research_pipeline", "error", error=exc)
 
     # Build data_sources list
     data_sources.append("отраслевые бенчмарки (web)")
@@ -463,9 +480,12 @@ def analyze_business(
         result = _run_with_tools(prompt["system"], fallback_content, client)
 
     if result is None:
+        log_agent_step("auditor.analyze_business", "fallback")
         return _fallback_assessment(profile)
 
-    result["data_sources"] = data_sources
+    llm_sources = result.get("data_sources", [])
+    result["data_sources"] = list(dict.fromkeys([*llm_sources, *data_sources]))
+    log_agent_step("auditor.analyze_business", "success", data_sources=result["data_sources"])
     return result
 
 

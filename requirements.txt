@@ -10,3 +10,4 @@ duckduckgo-search>=6.0.0
 markdown>=3.5.0
 weasyprint>=60.0
 matplotlib>=3.8.0
+reportlab>=4.0.0

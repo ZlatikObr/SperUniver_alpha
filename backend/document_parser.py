@@ -1,6 +1,7 @@
 """Extracts key financial/operational metrics from uploaded PDF, CSV, or Excel files."""
 import io
-from typing import BinaryIO
+
+from .agent_logger import log_agent_step
 
 
 SUPPORTED_EXTENSIONS = {".pdf", ".csv", ".xlsx", ".xls"}
@@ -19,16 +20,27 @@ def parse_document(file_bytes: bytes, filename: str) -> dict:
     """
     ext = _get_ext(filename)
     if ext not in SUPPORTED_EXTENSIONS:
+        log_agent_step("document_parser.parse_document", "unsupported", filename=filename, extension=ext)
         return {"metrics": {}, "summary": "", "error": UNSUPPORTED_MSG}
 
     try:
         if ext == ".pdf":
-            return _parse_pdf(file_bytes)
+            result = _parse_pdf(file_bytes)
         elif ext == ".csv":
-            return _parse_csv(file_bytes)
+            result = _parse_csv(file_bytes)
         else:
-            return _parse_excel(file_bytes)
+            result = _parse_excel(file_bytes)
+        log_agent_step(
+            "document_parser.parse_document",
+            "success" if not result.get("error") else "error",
+            filename=filename,
+            extension=ext,
+            metric_count=len(result.get("metrics", {})),
+            error=result.get("error"),
+        )
+        return result
     except Exception as e:
+        log_agent_step("document_parser.parse_document", "error", filename=filename, extension=ext, error=e)
         return {
             "metrics": {},
             "summary": "",
@@ -72,9 +84,10 @@ def _parse_csv(data: bytes) -> dict:
 
     for encoding in ("utf-8", "cp1251", "latin-1"):
         try:
-            df = pd.read_csv(io.BytesIO(data), encoding=encoding)
+            df = pd.read_csv(io.BytesIO(data), encoding=encoding, sep=None, engine="python")
             break
-        except Exception:
+        except Exception as exc:
+            log_agent_step("document_parser.parse_csv", "encoding_failed", encoding=encoding, error=exc)
             continue
     else:
         return {"metrics": {}, "summary": "", "error": "Не удалось прочитать CSV-файл."}
@@ -90,8 +103,6 @@ def _parse_excel(data: bytes) -> dict:
 
 
 def _dataframe_to_result(df) -> dict:
-    import pandas as pd
-
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
     metrics = {}
     for col in numeric_cols[:20]:
@@ -114,9 +125,10 @@ def _extract_numeric_mentions(text: str) -> dict:
     """Rough extraction of labeled numbers from text (revenue, profit, etc.)."""
     import re
 
+    number = r"(?:\d{1,3}(?:[\s.]\d{3})+|\d+)(?:[,.]\d+)?"
     patterns = {
-        "выручка": r"выручк[аеи]\s*[:\-–]?\s*([\d\s.,]+)\s*(млн|тыс|руб|₽)?",
-        "прибыль": r"прибыл[ьи]\s*[:\-–]?\s*([\d\s.,]+)\s*(млн|тыс|руб|₽)?",
+        "выручка": rf"выручк[аеи]\s*[:\-–]?\s*({number})\s*(млн|тыс|руб|₽)?",
+        "прибыль": rf"прибыл[ьи]\s*[:\-–]?\s*({number})\s*(млн|тыс|руб|₽)?",
         "сотрудники": r"(сотрудник|работник|персонал|штат)[а-я]*\s*[:\-–]?\s*([\d]+)",
         "клиенты": r"клиент[а-я]*\s*[:\-–]?\s*([\d]+)",
     }

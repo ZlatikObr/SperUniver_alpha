@@ -2,13 +2,17 @@
 import json
 from pathlib import Path
 
+from .agent_logger import log_agent_step
+
 _ROOT = Path(__file__).parent.parent  # repo root
 
 
 def load_catalog() -> list[dict]:
     path = _ROOT / "data" / "services_catalog.json"
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        catalog = json.load(f)
+    log_agent_step("catalog.load_catalog", "success", service_count=len(catalog))
+    return catalog
 
 
 def filter_services(
@@ -42,6 +46,13 @@ def filter_services(
             seen_ids.add(svc["id"])
 
     if len(matched) < 3:
+        log_agent_step(
+            "catalog.filter_services",
+            "padding",
+            requested_zones=sorted(zone_set),
+            industry=industry,
+            matched_before_padding=len(matched),
+        )
         for svc in catalog:
             if svc["id"] not in seen_ids and svc.get("zone", "").lower() in zone_set:
                 matched.append(svc)
@@ -55,9 +66,18 @@ def filter_services(
             if len(matched) >= 3:
                 break
 
+    log_agent_step(
+        "catalog.filter_services",
+        "success",
+        requested_zones=sorted(zone_set),
+        industry=industry,
+        result_count=len(matched),
+    )
     return matched
 
 
 def get_services_by_ids(catalog: list[dict], ids: list[str]) -> list[dict]:
     id_set = set(ids)
-    return [s for s in catalog if s["id"] in id_set]
+    result = [s for s in catalog if s["id"] in id_set]
+    log_agent_step("catalog.get_services_by_ids", "success", requested_count=len(ids), result_count=len(result))
+    return result

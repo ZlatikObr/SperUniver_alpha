@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 .DS_Store
 .streamlit/secrets.toml
+logs/*.jsonl
 *.egg-info/
 dist/
 build/

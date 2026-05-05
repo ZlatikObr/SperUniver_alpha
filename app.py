@@ -1,4 +1,5 @@
 """Пульс — AI-диагностика бизнеса."""
+import logging
 import os
 import sys
 import time
@@ -17,7 +18,10 @@ from backend.survey import get_base_questions, generate_followup_questions, buil
 from backend.document_parser import parse_document
 from backend.auditor import analyze_business
 from backend.catalog import load_catalog, filter_services, get_services_by_ids
+from backend.agent_logger import log_agent_step
 from backend.proposal_gen import generate_proposal_text, render_html, render_pdf, _fallback_proposal
+
+logger = logging.getLogger(__name__)
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -251,6 +255,7 @@ def _init_state():
         "proposal_markdown": "",
         "proposal_html": "",
         "start_ts": None,
+        "last_doc_error": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -258,13 +263,19 @@ def _init_state():
 
 
 def _go(step: str):
+    log_agent_step("app.transition", "success", to=step, from_step=st.session_state.get("step"))
     st.session_state.step = step
     st.rerun()
 
 
 def _get_client() -> OpenAI:
     # Streamlit Cloud secrets take priority, then .env
-    api_key = st.secrets.get("AITUNNEL_API_KEY", "") if hasattr(st, "secrets") else ""
+    try:
+        api_key = st.secrets.get("AITUNNEL_API_KEY", "")
+    except Exception as exc:
+        logger.debug("Streamlit secrets are unavailable locally.", exc_info=True)
+        log_agent_step("app.get_client", "secrets_unavailable", error=exc)
+        api_key = ""
     if not api_key:
         api_key = os.getenv("AITUNNEL_API_KEY", "")
     if not api_key:
@@ -327,7 +338,6 @@ def _section(title: str):
 # ─── Pages ────────────────────────────────────────────────────────────────────
 
 def page_welcome():
-    st.markdown(CSS, unsafe_allow_html=True)
     _logo()
 
     st.markdown(
@@ -390,7 +400,6 @@ def page_welcome():
 
 
 def page_survey_base():
-    st.markdown(CSS, unsafe_allow_html=True)
     _logo()
     _progress("survey_base")
 
@@ -429,7 +438,6 @@ def page_survey_base():
 
 
 def page_survey_followup():
-    st.markdown(CSS, unsafe_allow_html=True)
     _logo()
     _progress("survey_followup")
 
@@ -468,7 +476,6 @@ def page_survey_followup():
 
 
 def page_document():
-    st.markdown(CSS, unsafe_allow_html=True)
     _logo()
     _progress("document")
 
@@ -500,23 +507,29 @@ def page_document():
 
     if skip:
         st.session_state.doc_result = None
+        st.session_state.last_doc_error = ""
         _go("analyzing")
 
     if proceed and uploaded:
         with st.spinner("Обрабатываю документ..."):
             doc_result = parse_document(uploaded.read(), uploaded.name)
         if doc_result.get("error"):
-            st.warning(doc_result["error"])
-            if st.button("Продолжить без документа"):
-                st.session_state.doc_result = None
-                _go("analyzing")
+            st.session_state.doc_result = None
+            st.session_state.last_doc_error = doc_result["error"]
         else:
             st.session_state.doc_result = doc_result
+            st.session_state.last_doc_error = ""
+            _go("analyzing")
+
+    if st.session_state.last_doc_error:
+        st.warning(st.session_state.last_doc_error)
+        if st.button("Продолжить без документа", key="continue_without_document"):
+            st.session_state.doc_result = None
+            st.session_state.last_doc_error = ""
             _go("analyzing")
 
 
 def page_analyzing():
-    st.markdown(CSS, unsafe_allow_html=True)
     _logo()
     _progress("analyzing")
 
@@ -573,7 +586,6 @@ def page_analyzing():
 
 
 def page_diagnostics():
-    st.markdown(CSS, unsafe_allow_html=True)
     _logo()
     _progress("diagnostics")
 
@@ -681,7 +693,6 @@ def _parse_roi_min(roi_str: str) -> int:
 
 
 def page_catalog():
-    st.markdown(CSS, unsafe_allow_html=True)
     _logo()
     _progress("catalog")
 
@@ -726,7 +737,7 @@ def page_catalog():
 
         col1, col2 = st.columns([0.06, 0.94])
         with col1:
-            checked = st.checkbox("", key=f"svc_{svc['id']}", value=True)
+            checked = st.checkbox("выбрать", key=f"svc_{svc['id']}", value=True, label_visibility="collapsed")
         with col2:
             st.markdown(
                 f'<div style="background:#fff;border:{card_border};border-radius:10px;'
@@ -767,7 +778,6 @@ def page_catalog():
 
 
 def page_generating():
-    st.markdown(CSS, unsafe_allow_html=True)
     _logo()
     _progress("generating")
 
@@ -779,7 +789,9 @@ def page_generating():
 
     try:
         catalog = load_catalog()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to load catalog on proposal generation page.", exc_info=True)
+        log_agent_step("app.page_generating.load_catalog", "error", error=exc)
         catalog = []
     selected_services = get_services_by_ids(catalog, st.session_state.selected_ids) if catalog else []
 
@@ -793,6 +805,8 @@ def page_generating():
                 client,
             )
         except Exception as e:
+            logger.warning("AI proposal generation failed in app.", exc_info=True)
+            log_agent_step("app.page_generating.generate_proposal", "error", error=e)
             st.error(f"Не удалось сгенерировать КП через AI: {e}. Формирую базовый вариант.")
             proposal_md = _fallback_proposal(
                 st.session_state.business_profile,
@@ -807,14 +821,15 @@ def page_generating():
                 st.session_state.business_profile,
                 st.session_state.assessment,
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("HTML rendering failed in app.", exc_info=True)
+            log_agent_step("app.page_generating.render_html", "error", error=exc)
             st.session_state.proposal_html = f"<pre>{proposal_md}</pre>"
 
     _go("proposal")
 
 
 def page_proposal():
-    st.markdown(CSS, unsafe_allow_html=True)
     _logo()
     _progress("proposal")
 
@@ -888,6 +903,7 @@ def page_proposal():
 
 def main():
     _init_state()
+    st.markdown(CSS, unsafe_allow_html=True)
     router = {
         "welcome":         page_welcome,
         "survey_base":     page_survey_base,

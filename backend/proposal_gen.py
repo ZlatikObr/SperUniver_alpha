@@ -1,8 +1,7 @@
 """Generates proposal text, renders HTML with charts, exports PDF."""
 import io
 import base64
-import yaml
-from pathlib import Path
+import logging
 from datetime import date
 
 import matplotlib
@@ -13,22 +12,17 @@ import numpy as np
 
 from openai import OpenAI
 
-MODEL = "gpt-4o-mini"
+from ._config import MODEL
+from ._utils import load_prompt as _load_prompt
+from .agent_logger import log_agent_step
+
+logger = logging.getLogger(__name__)
 
 SCORE_COLORS = {1: "#E53935", 2: "#FB8C00", 3: "#FDD835", 4: "#43A047", 5: "#1E88E5"}
 ZONE_RU = {
     "финансы": "Финансы", "операции": "Операции",
     "маркетинг": "Маркетинг", "команда": "Команда", "стратегия": "Стратегия",
 }
-
-
-_ROOT = Path(__file__).parent.parent  # repo root
-
-
-def _load_prompt(name: str) -> dict:
-    path = _ROOT / "prompts" / f"{name}.yaml"
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 def _build_services_section(selected_services: list[dict]) -> str:
@@ -71,9 +65,17 @@ def generate_proposal_text(
     conclusion). The services section is assembled by code so ALL selected
     services are always present — LLM cannot omit or summarise them.
     """
+    log_agent_step(
+        "proposal_gen.generate_proposal_text",
+        "start",
+        service_count=len(selected_services),
+        industry=profile.get("industry"),
+    )
     try:
         prompt = _load_prompt("proposal_v1")
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to load proposal prompt; using fallback prompt.", exc_info=True)
+        log_agent_step("proposal_gen.generate_proposal_text", "prompt_fallback", error=exc)
         prompt = {"system": "Ты — бизнес-консультант. Составь профессиональное КП в формате Markdown."}
 
     health = assessment.get("health_assessment", {})
@@ -125,7 +127,9 @@ def generate_proposal_text(
             ],
         )
         narrative = response.choices[0].message.content or ""
-    except Exception:
+    except Exception as exc:
+        logger.warning("LLM proposal generation failed; using fallback narrative.", exc_info=True)
+        log_agent_step("proposal_gen.generate_proposal_text", "llm_error", error=exc)
         narrative = ""
 
     if not narrative:
@@ -134,7 +138,9 @@ def generate_proposal_text(
     # Append the services section built by code — always complete
     services_section = _build_services_section(selected_services)
 
-    return narrative + "\n\n" + services_section
+    result = narrative + "\n\n" + services_section
+    log_agent_step("proposal_gen.generate_proposal_text", "success", output_chars=len(result))
+    return result
 
 
 def _fallback_narrative(profile: dict, health: dict) -> str:
@@ -202,7 +208,9 @@ def _radar_chart(zones: list[dict]) -> str:
         ax.grid(color="#E0DED8", linewidth=0.8)
 
         return _fig_to_base64(fig)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Radar chart generation failed.", exc_info=True)
+        log_agent_step("proposal_gen.radar_chart", "error", error=exc)
         return ""
 
 
@@ -249,7 +257,9 @@ def _bar_chart(zones: list[dict]) -> str:
 
         plt.tight_layout()
         return _fig_to_base64(fig)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Bar chart generation failed.", exc_info=True)
+        log_agent_step("proposal_gen.bar_chart", "error", error=exc)
         return ""
 
 
@@ -286,7 +296,9 @@ def _risk_chart(top_risks: list[str]) -> str:
 
         plt.tight_layout()
         return _fig_to_base64(fig)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Risk chart generation failed.", exc_info=True)
+        log_agent_step("proposal_gen.risk_chart", "error", error=exc)
         return ""
 
 
@@ -296,7 +308,9 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None) 
     try:
         import markdown as md_lib
         body_html = md_lib.markdown(proposal_markdown, extensions=["tables", "fenced_code"])
-    except Exception:
+    except Exception as exc:
+        logger.warning("Markdown package rendering failed; using simple renderer.", exc_info=True)
+        log_agent_step("proposal_gen.render_html", "markdown_fallback", error=exc)
         body_html = _simple_md_to_html(proposal_markdown)
 
     company_info = f"{profile.get('industry', '')} · {profile.get('region', '')} · {profile.get('revenue_range', '')}"
@@ -422,7 +436,28 @@ def render_pdf(html: str) -> bytes | None:
     try:
         from weasyprint import HTML as WeasyprintHTML
         return WeasyprintHTML(string=html).write_pdf()
-    except Exception:
+    except Exception as exc:
+        logger.warning("WeasyPrint PDF rendering failed.", exc_info=True)
+        log_agent_step("proposal_gen.render_pdf", "weasyprint_error", error=exc)
+
+    import sys
+    if "weasyprint" in sys.modules and sys.modules["weasyprint"] is None:
+        return None
+
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+
+        buffer = io.BytesIO()
+        pdf = canvas.Canvas(buffer, pagesize=A4)
+        pdf.setFont("Helvetica", 10)
+        pdf.drawString(40, 800, "ПУЛЬС: PDF fallback. Скачайте HTML для полной версии с графиками.")
+        pdf.showPage()
+        pdf.save()
+        return buffer.getvalue()
+    except Exception as exc:
+        logger.warning("ReportLab PDF fallback failed.", exc_info=True)
+        log_agent_step("proposal_gen.render_pdf", "reportlab_error", error=exc)
         return None
 
 
