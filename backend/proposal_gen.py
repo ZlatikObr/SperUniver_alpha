@@ -31,12 +31,46 @@ def _load_prompt(name: str) -> dict:
         return yaml.safe_load(f)
 
 
+def _build_services_section(selected_services: list[dict]) -> str:
+    """
+    Build the services block programmatically — 100% guaranteed to include
+    every service the user selected, regardless of LLM token limits.
+    """
+    if not selected_services:
+        return ""
+
+    lines = ["## Перечень услуг\n"]
+    for i, svc in enumerate(selected_services, 1):
+        name   = svc.get("name", "—")
+        desc   = svc.get("description", "—")
+        effect = svc.get("expected_effect", "—")
+        price  = svc.get("price_range", "—")
+        dur    = svc.get("duration", "—")
+        roi    = svc.get("roi_estimate", "—")
+        zone   = svc.get("zone", "—").capitalize()
+
+        lines.append(
+            f"### {i}. {name}\n"
+            f"**Зона:** {zone}  \n"
+            f"**Описание:** {desc}  \n"
+            f"**Ожидаемый эффект:** {effect}  \n"
+            f"**Стоимость:** {price} · **Срок:** {dur} · **ROI:** {roi}\n"
+        )
+
+    return "\n".join(lines)
+
+
 def generate_proposal_text(
     profile: dict,
     assessment: dict,
     selected_services: list[dict],
     client: OpenAI,
 ) -> str:
+    """
+    Strategy: LLM writes only the narrative (intro, diagnosis, recommendations,
+    conclusion). The services section is assembled by code so ALL selected
+    services are always present — LLM cannot omit or summarise them.
+    """
     try:
         prompt = _load_prompt("proposal_v1")
     except Exception:
@@ -50,17 +84,10 @@ def generate_proposal_text(
         risks = "; ".join(z.get("risks", []))
         zones_text += f"- **{z['name'].capitalize()}** (оценка {score}/5): {risks or 'без критических рисков'}\n"
 
-    # Compact format: one line per service so even 20+ services fit within token budget
-    services_text = ""
-    for svc in selected_services:
-        services_text += (
-            f"- **{svc.get('name', '—')}** | {svc.get('price_range', '—')} | "
-            f"{svc.get('duration', '—')} | ROI {svc.get('roi_estimate', '—')} — "
-            f"{svc.get('expected_effect', '—')}\n"
-        )
-
     top_risks = "\n".join(f"- {r}" for r in health.get("top_risks", []))
+    n_services = len(selected_services)
 
+    # LLM prompt: narrative only — no services enumeration
     user_message = f"""
 ## Профиль клиента
 Отрасль: {profile.get('industry', 'Не указано')}
@@ -75,43 +102,65 @@ def generate_proposal_text(
 ## Топ-3 риска
 {top_risks}
 
-## Выбранные клиентом услуги
-{services_text}
+Клиент выбрал {n_services} услуг (они будут добавлены в КП отдельным блоком автоматически — тебе перечислять их НЕ нужно).
 
-Сформируй профессиональное КП в формате Markdown.
+Сформируй в Markdown только следующие разделы КП:
+1. Заголовок и краткое резюме (2–3 абзаца о ситуации клиента и ценности работы с нами)
+2. Результаты диагностики (по зонам)
+3. Ключевые риски и приоритеты
+4. Стратегические рекомендации (3–5 пунктов)
+5. Следующие шаги (как начать работу)
+6. Почему мы (короткий блок доверия)
+
+НЕ добавляй раздел со списком услуг — он будет вставлен автоматически.
 """
 
     try:
         response = client.chat.completions.create(
             model=MODEL,
-            max_tokens=4000,
+            max_tokens=2500,
             messages=[
                 {"role": "system", "content": prompt["system"]},
                 {"role": "user", "content": user_message},
             ],
         )
-        return response.choices[0].message.content or _fallback_proposal(profile, health, selected_services)
+        narrative = response.choices[0].message.content or ""
     except Exception:
-        return _fallback_proposal(profile, health, selected_services)
+        narrative = ""
+
+    if not narrative:
+        narrative = _fallback_narrative(profile, health)
+
+    # Append the services section built by code — always complete
+    services_section = _build_services_section(selected_services)
+
+    return narrative + "\n\n" + services_section
 
 
-def _fallback_proposal(profile: dict, health: dict, services: list[dict]) -> str:
-    """Minimal text КП when LLM call fails."""
+def _fallback_narrative(profile: dict, health: dict) -> str:
+    """Minimal narrative when LLM call fails — services appended separately by caller."""
     lines = [
-        f"# Коммерческое предложение",
-        f"\n## Профиль клиента",
-        f"- Отрасль: {profile.get('industry', '—')}",
-        f"- Регион: {profile.get('region', '—')}",
-        f"- Выручка: {profile.get('revenue_range', '—')}",
-        f"\n## Диагностика по зонам",
+        "# Коммерческое предложение",
+        "",
+        f"**Отрасль:** {profile.get('industry', '—')}  ",
+        f"**Регион:** {profile.get('region', '—')}  ",
+        f"**Выручка:** {profile.get('revenue_range', '—')}",
+        "",
+        "## Диагностика по зонам",
     ]
     for z in health.get("zones", []):
         lines.append(f"- **{z['name'].capitalize()}**: {z.get('score', '?')}/5")
-    lines.append("\n## Рекомендуемые услуги")
-    for svc in services:
-        lines.append(f"- **{svc.get('name', '—')}** — {svc.get('price_range', '—')}, срок {svc.get('duration', '—')}")
-    lines.append("\n---\n*Анализ носит рекомендательный характер.*")
+    lines.append("")
+    lines.append("---")
+    lines.append("*Анализ носит рекомендательный характер.*")
     return "\n".join(lines)
+
+
+def _fallback_proposal(profile: dict, health: dict, services: list[dict]) -> str:
+    """Full fallback КП (used from app.py except-block)."""
+    narrative = _fallback_narrative(profile, health)
+    services_section = _build_services_section(services)
+    return narrative + "\n\n" + services_section
 
 
 # ─── Chart generators ─────────────────────────────────────────────────────────
