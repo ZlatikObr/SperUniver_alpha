@@ -50,13 +50,13 @@ def generate_proposal_text(
         risks = "; ".join(z.get("risks", []))
         zones_text += f"- **{z['name'].capitalize()}** (оценка {score}/5): {risks or 'без критических рисков'}\n"
 
+    # Compact format: one line per service so even 20+ services fit within token budget
     services_text = ""
     for svc in selected_services:
         services_text += (
-            f"### {svc.get('name', '—')}\n"
-            f"Описание: {svc.get('description', '—')}\n"
-            f"Ожидаемый эффект: {svc.get('expected_effect', '—')}\n"
-            f"Стоимость: {svc.get('price_range', '—')} | Срок: {svc.get('duration', '—')} | ROI: {svc.get('roi_estimate', '—')}\n\n"
+            f"- **{svc.get('name', '—')}** | {svc.get('price_range', '—')} | "
+            f"{svc.get('duration', '—')} | ROI {svc.get('roi_estimate', '—')} — "
+            f"{svc.get('expected_effect', '—')}\n"
         )
 
     top_risks = "\n".join(f"- {r}" for r in health.get("top_risks", []))
@@ -84,7 +84,7 @@ def generate_proposal_text(
     try:
         response = client.chat.completions.create(
             model=MODEL,
-            max_tokens=1500,
+            max_tokens=4000,
             messages=[
                 {"role": "system", "content": prompt["system"]},
                 {"role": "user", "content": user_message},

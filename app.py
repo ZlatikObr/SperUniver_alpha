@@ -673,6 +673,13 @@ def page_diagnostics():
             _go("catalog")
 
 
+def _parse_roi_min(roi_str: str) -> int:
+    """Extract first numeric value from ROI string like '400–1000%' → 400."""
+    import re
+    nums = re.findall(r"\d+", roi_str or "")
+    return int(nums[0]) if nums else 0
+
+
 def page_catalog():
     st.markdown(CSS, unsafe_allow_html=True)
     _logo()
@@ -685,10 +692,14 @@ def page_catalog():
             _go("diagnostics")
         return
 
+    # Sort by ROI descending; top-3 get a "recommended" badge
+    services_sorted = sorted(services, key=lambda s: _parse_roi_min(s.get("roi_estimate", "")), reverse=True)
+    top_ids = {s["id"] for s in services_sorted[:3]}
+
     st.markdown(
         f'<h2 style="font-size:22px;font-weight:700;color:#1E1E1E;margin-bottom:4px;">Рекомендованные услуги</h2>'
         f'<p style="font-size:13px;color:#7b7b78;margin-bottom:1.5rem;">'
-        f'Подобрано {len(services)} услуг по результатам диагностики.</p>',
+        f'Подобрано {len(services_sorted)} услуг по результатам диагностики.</p>',
         unsafe_allow_html=True,
     )
 
@@ -698,21 +709,33 @@ def page_catalog():
     }
 
     selected = []
-    for svc in services:
+    for svc in services_sorted:
         zone       = svc.get("zone", "")
         zone_color = ZONE_COLORS.get(zone, "#7b7b78")
+        is_top     = svc["id"] in top_ids
+
+        # Top-ROI badge HTML
+        top_badge = (
+            '<span style="background:#FF5600;color:#fff;border-radius:4px;'
+            'padding:2px 10px;font-size:11px;font-weight:700;letter-spacing:0.02em;">'
+            '★ Рекомендуем для максимального результата</span>'
+        ) if is_top else ""
+
+        # Card border highlight for top services
+        card_border = "2px solid #FF5600" if is_top else "1px solid #E0DED8"
 
         col1, col2 = st.columns([0.06, 0.94])
         with col1:
             checked = st.checkbox("", key=f"svc_{svc['id']}", value=True)
         with col2:
             st.markdown(
-                f'<div style="background:#fff;border:1px solid #E0DED8;border-radius:10px;'
+                f'<div style="background:#fff;border:{card_border};border-radius:10px;'
                 f'padding:16px 20px;margin-bottom:2px;transition:box-shadow 0.2s;">'
-                f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
+                f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:6px;">'
                 f'<span style="background:{zone_color}15;color:{zone_color};border:1px solid {zone_color}30;'
                 f'border-radius:4px;padding:1px 8px;font-size:11px;font-weight:600;">{zone.capitalize()}</span>'
                 f'<span style="font-size:14px;font-weight:600;color:#1E1E1E;">{svc["name"]}</span>'
+                f'{top_badge}'
                 f'</div>'
                 f'<p style="font-size:13px;color:#7b7b78;margin-bottom:10px;line-height:1.5;">{svc["description"]}</p>'
                 f'<div style="display:flex;gap:20px;font-size:12px;">'
