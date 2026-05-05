@@ -528,40 +528,46 @@ def page_analyzing():
 
     client = _get_client()
 
-    with st.status("Запускаю исследование...", expanded=True) as status:
-        status.update(label="🧠 Строю профиль бизнеса...")
-        profile = build_business_profile(
-            st.session_state.base_answers,
-            st.session_state.followup_answers,
-            client,
+    # Используем st.empty() — надёжнее st.status() в разных версиях Streamlit
+    progress_placeholder = st.empty()
+
+    def show_step(msg: str):
+        progress_placeholder.markdown(
+            f'<div style="background:#fff;border:1px solid #E0DED8;border-radius:8px;'
+            f'padding:12px 18px;font-size:13px;color:#1E1E1E;">{msg}</div>',
+            unsafe_allow_html=True,
         )
-        st.session_state.business_profile = profile
 
-        answer_count = len(st.session_state.base_answers) + len(st.session_state.followup_answers)
+    show_step("🧠 Строю профиль бизнеса...")
+    profile = build_business_profile(
+        st.session_state.base_answers,
+        st.session_state.followup_answers,
+        client,
+    )
+    st.session_state.business_profile = profile
 
-        def on_progress(msg: str):
-            status.update(label=msg)
+    answer_count = len(st.session_state.base_answers) + len(st.session_state.followup_answers)
 
-        assessment = analyze_business(
-            profile,
-            st.session_state.doc_result,
-            client,
-            answer_count=answer_count,
-            on_progress=on_progress,
-        )
-        st.session_state.assessment = assessment
+    assessment = analyze_business(
+        profile,
+        st.session_state.doc_result,
+        client,
+        answer_count=answer_count,
+        on_progress=show_step,
+    )
+    st.session_state.assessment = assessment
 
-        status.update(label="📋 Формирую витрину услуг...")
-        zones         = assessment.get("health_assessment", {}).get("zones", [])
-        risk_zone_ids = [z["name"] for z in zones if z.get("score", 5) <= 3]
-        if not risk_zone_ids:
-            risk_zone_ids = assessment.get("recommended_zone_ids", ["финансы", "стратегия"])
+    show_step("📋 Формирую витрину услуг...")
+    zones         = assessment.get("health_assessment", {}).get("zones", [])
+    risk_zone_ids = [z["name"] for z in zones if z.get("score", 5) <= 3]
+    if not risk_zone_ids:
+        risk_zone_ids = assessment.get("recommended_zone_ids", ["финансы", "стратегия"])
 
-        catalog  = load_catalog()
-        filtered = filter_services(catalog, risk_zone_ids, profile.get("industry", ""))
-        st.session_state.catalog_services = filtered
+    catalog  = load_catalog()
+    filtered = filter_services(catalog, risk_zone_ids, profile.get("industry", ""))
+    st.session_state.catalog_services = filtered
 
-        status.update(label="✅ Анализ завершён!", state="complete", expanded=False)
+    show_step("✅ Анализ завершён!")
 
     _go("diagnostics")
 

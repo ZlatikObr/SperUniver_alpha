@@ -367,33 +367,68 @@ def analyze_business(
     has_doc = bool(doc_metrics and doc_metrics.get("summary"))
     data_sources: list[str] = ["опрос"]
 
-    # ── Research pipeline — all searches run in parallel ───────────────────
+    # ── Research pipeline — parallel searches ─────────────────────────────
     _notify("🔍 Исследуем рынок: бенчмарки по 5 зонам и конкуренты...")
 
     zone_queries = _build_zone_queries(profile)
+    zone_benchmarks: dict = {}
+    hh_data: dict = {}
+    cbr: str = ""
+    competitors: str = ""
+    macro: str = ""
+    micro: str = ""
+    doc_benchmarks: str = ""
 
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        # Zone-specific searches (5)
-        zone_futs = {zone: ex.submit(_web_search, q) for zone, q in zone_queries.items()}
-        # Open data (2)
-        hh_fut   = ex.submit(_fetch_hh_data, profile)
-        cbr_fut  = ex.submit(_fetch_cbr_rate)
-        # Competitor analysis (runs 2 searches internally)
-        comp_fut = ex.submit(_research_competitors, profile)
-        # Macro phase 1 (runs 2 searches internally)
-        mac_fut  = ex.submit(_run_phase1_macro, profile)
-        # Micro phase 2 (runs 1 search internally)
-        mic_fut  = ex.submit(_run_phase2_micro, profile)
-        # Doc benchmarks (if document uploaded)
-        doc_fut  = ex.submit(_run_doc_benchmarks, profile, doc_metrics) if has_doc else None
+    try:
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            zone_futs = {zone: ex.submit(_web_search, q) for zone, q in zone_queries.items()}
+            hh_fut    = ex.submit(_fetch_hh_data, profile)
+            cbr_fut   = ex.submit(_fetch_cbr_rate)
+            comp_fut  = ex.submit(_research_competitors, profile)
+            mac_fut   = ex.submit(_run_phase1_macro, profile)
+            mic_fut   = ex.submit(_run_phase2_micro, profile)
+            doc_fut   = ex.submit(_run_doc_benchmarks, profile, doc_metrics) if has_doc else None
 
-        zone_benchmarks = {zone: f.result() for zone, f in zone_futs.items()}
-        hh_data  = hh_fut.result()
-        cbr      = cbr_fut.result()
-        competitors = comp_fut.result()
-        macro    = mac_fut.result()
-        micro    = mic_fut.result()
-        doc_benchmarks = doc_fut.result() if doc_fut else ""
+            for zone, f in zone_futs.items():
+                try:
+                    zone_benchmarks[zone] = f.result(timeout=20)
+                except Exception:
+                    zone_benchmarks[zone] = ""
+
+            try:
+                hh_data = hh_fut.result(timeout=10)
+            except Exception:
+                hh_data = {}
+
+            try:
+                cbr = cbr_fut.result(timeout=10)
+            except Exception:
+                cbr = ""
+
+            try:
+                competitors = comp_fut.result(timeout=20)
+            except Exception:
+                competitors = ""
+
+            try:
+                macro = mac_fut.result(timeout=20)
+            except Exception:
+                macro = ""
+
+            try:
+                micro = mic_fut.result(timeout=15)
+            except Exception:
+                micro = ""
+
+            if doc_fut:
+                try:
+                    doc_benchmarks = doc_fut.result(timeout=15)
+                except Exception:
+                    doc_benchmarks = ""
+
+    except Exception:
+        # If ThreadPoolExecutor itself fails — continue with empty research context
+        pass
 
     # Build data_sources list
     data_sources.append("отраслевые бенчмарки (web)")
