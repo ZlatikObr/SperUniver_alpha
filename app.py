@@ -69,6 +69,7 @@ st.set_page_config(
 SCORE_COLORS = {1: "#E53935", 2: "#FB8C00", 3: "#FDD835", 4: "#43A047", 5: "#1E88E5"}
 SCORE_LABELS = {1: "Критично", 2: "Проблемно", 3: "Требует внимания", 4: "Удовлетворительно", 5: "Сильная зона"}
 ZONE_ICONS  = {"финансы": "₽", "операции": "⚙", "маркетинг": "◈", "команда": "◉", "стратегия": "◎"}
+REPORT_RENDER_VERSION = "2026-05-05-risk-wrap-v2"
 
 CSS = """
 <style>
@@ -311,6 +312,7 @@ def _init_state():
         "selected_ids": [],
         "proposal_markdown": "",
         "proposal_html": "",
+        "proposal_render_version": "",
         "start_ts": None,
         "last_doc_error": "",
     }
@@ -929,10 +931,12 @@ def page_generating():
                 st.session_state.business_profile,
                 st.session_state.assessment,
             )
+            st.session_state.proposal_render_version = REPORT_RENDER_VERSION
         except Exception as exc:
             logger.warning("HTML rendering failed in app.", exc_info=True)
             log_agent_step("app.page_generating.render_html", "error", error=exc)
             st.session_state.proposal_html = f"<pre>{proposal_md}</pre>"
+            st.session_state.proposal_render_version = REPORT_RENDER_VERSION
 
     _go("proposal")
 
@@ -940,6 +944,21 @@ def page_generating():
 def page_proposal():
     _logo()
     _progress("proposal")
+
+    if (
+        st.session_state.get("proposal_markdown")
+        and st.session_state.get("proposal_render_version") != REPORT_RENDER_VERSION
+    ):
+        try:
+            st.session_state.proposal_html = render_html(
+                st.session_state.proposal_markdown,
+                st.session_state.business_profile,
+                st.session_state.assessment,
+            )
+            st.session_state.proposal_render_version = REPORT_RENDER_VERSION
+        except Exception as exc:
+            logger.warning("Proposal HTML rerender failed on version bump.", exc_info=True)
+            log_agent_step("app.page_proposal.rerender_html", "error", error=exc)
 
     if st.session_state.start_ts:
         elapsed = int(time.time() - st.session_state.start_ts)
