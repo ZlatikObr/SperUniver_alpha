@@ -22,8 +22,11 @@ ZONE_RU = {
 }
 
 
+_ROOT = Path(__file__).parent.parent  # repo root
+
+
 def _load_prompt(name: str) -> dict:
-    path = Path("prompts") / f"{name}.yaml"
+    path = _ROOT / "prompts" / f"{name}.yaml"
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
@@ -34,7 +37,11 @@ def generate_proposal_text(
     selected_services: list[dict],
     client: OpenAI,
 ) -> str:
-    prompt = _load_prompt("proposal_v1")
+    try:
+        prompt = _load_prompt("proposal_v1")
+    except Exception:
+        prompt = {"system": "Ты — бизнес-консультант. Составь профессиональное КП в формате Markdown."}
+
     health = assessment.get("health_assessment", {})
 
     zones_text = ""
@@ -46,10 +53,10 @@ def generate_proposal_text(
     services_text = ""
     for svc in selected_services:
         services_text += (
-            f"### {svc['name']}\n"
-            f"Описание: {svc['description']}\n"
-            f"Ожидаемый эффект: {svc['expected_effect']}\n"
-            f"Стоимость: {svc['price_range']} | Срок: {svc['duration']} | ROI: {svc['roi_estimate']}\n\n"
+            f"### {svc.get('name', '—')}\n"
+            f"Описание: {svc.get('description', '—')}\n"
+            f"Ожидаемый эффект: {svc.get('expected_effect', '—')}\n"
+            f"Стоимость: {svc.get('price_range', '—')} | Срок: {svc.get('duration', '—')} | ROI: {svc.get('roi_estimate', '—')}\n\n"
         )
 
     top_risks = "\n".join(f"- {r}" for r in health.get("top_risks", []))
@@ -74,15 +81,37 @@ def generate_proposal_text(
 Сформируй профессиональное КП в формате Markdown.
 """
 
-    response = client.chat.completions.create(
-        model=MODEL,
-        max_tokens=1500,
-        messages=[
-            {"role": "system", "content": prompt["system"]},
-            {"role": "user", "content": user_message},
-        ],
-    )
-    return response.choices[0].message.content or ""
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            max_tokens=1500,
+            messages=[
+                {"role": "system", "content": prompt["system"]},
+                {"role": "user", "content": user_message},
+            ],
+        )
+        return response.choices[0].message.content or _fallback_proposal(profile, health, selected_services)
+    except Exception:
+        return _fallback_proposal(profile, health, selected_services)
+
+
+def _fallback_proposal(profile: dict, health: dict, services: list[dict]) -> str:
+    """Minimal text КП when LLM call fails."""
+    lines = [
+        f"# Коммерческое предложение",
+        f"\n## Профиль клиента",
+        f"- Отрасль: {profile.get('industry', '—')}",
+        f"- Регион: {profile.get('region', '—')}",
+        f"- Выручка: {profile.get('revenue_range', '—')}",
+        f"\n## Диагностика по зонам",
+    ]
+    for z in health.get("zones", []):
+        lines.append(f"- **{z['name'].capitalize()}**: {z.get('score', '?')}/5")
+    lines.append("\n## Рекомендуемые услуги")
+    for svc in services:
+        lines.append(f"- **{svc.get('name', '—')}** — {svc.get('price_range', '—')}, срок {svc.get('duration', '—')}")
+    lines.append("\n---\n*Анализ носит рекомендательный характер.*")
+    return "\n".join(lines)
 
 
 # ─── Chart generators ─────────────────────────────────────────────────────────
@@ -99,111 +128,117 @@ def _fig_to_base64(fig) -> str:
 def _radar_chart(zones: list[dict]) -> str:
     if not zones:
         return ""
+    try:
+        labels = [ZONE_RU.get(z["name"], z["name"].capitalize()) for z in zones]
+        scores = [z.get("score", 3) for z in zones]
+        N = len(labels)
 
-    labels = [ZONE_RU.get(z["name"], z["name"].capitalize()) for z in zones]
-    scores = [z.get("score", 3) for z in zones]
-    N = len(labels)
+        angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
+        scores_plot = scores + [scores[0]]
+        angles += angles[:1]
 
-    angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
-    scores_plot = scores + [scores[0]]
-    angles += angles[:1]
+        fig, ax = plt.subplots(figsize=(4.5, 4.5), subplot_kw=dict(polar=True))
+        fig.patch.set_facecolor("white")
+        ax.set_facecolor("#FAFAFA")
 
-    fig, ax = plt.subplots(figsize=(4.5, 4.5), subplot_kw=dict(polar=True))
-    fig.patch.set_facecolor("white")
-    ax.set_facecolor("#FAFAFA")
+        ax.plot(angles, scores_plot, "o-", linewidth=2, color="#FF5600")
+        ax.fill(angles, scores_plot, alpha=0.15, color="#FF5600")
 
-    ax.plot(angles, scores_plot, "o-", linewidth=2, color="#FF5600")
-    ax.fill(angles, scores_plot, alpha=0.15, color="#FF5600")
+        ax.set_thetagrids(np.degrees(angles[:-1]), labels, fontsize=11, fontfamily="DejaVu Sans")
+        ax.set_ylim(0, 5)
+        ax.set_yticks([1, 2, 3, 4, 5])
+        ax.set_yticklabels(["1", "2", "3", "4", "5"], fontsize=8, color="#7b7b78")
+        ax.tick_params(pad=8)
+        ax.spines["polar"].set_color("#E0DED8")
+        ax.grid(color="#E0DED8", linewidth=0.8)
 
-    ax.set_thetagrids(np.degrees(angles[:-1]), labels, fontsize=11, fontfamily="DejaVu Sans")
-    ax.set_ylim(0, 5)
-    ax.set_yticks([1, 2, 3, 4, 5])
-    ax.set_yticklabels(["1", "2", "3", "4", "5"], fontsize=8, color="#7b7b78")
-    ax.tick_params(pad=8)
-    ax.spines["polar"].set_color("#E0DED8")
-    ax.grid(color="#E0DED8", linewidth=0.8)
-
-    return _fig_to_base64(fig)
+        return _fig_to_base64(fig)
+    except Exception:
+        return ""
 
 
 def _bar_chart(zones: list[dict]) -> str:
     if not zones:
         return ""
+    try:
+        labels = [ZONE_RU.get(z["name"], z["name"].capitalize()) for z in zones]
+        scores = [z.get("score", 3) for z in zones]
+        colors = [SCORE_COLORS.get(s, "#7b7b78") for s in scores]
 
-    labels = [ZONE_RU.get(z["name"], z["name"].capitalize()) for z in zones]
-    scores = [z.get("score", 3) for z in zones]
-    colors = [SCORE_COLORS.get(s, "#7b7b78") for s in scores]
+        fig, ax = plt.subplots(figsize=(6, 2.8))
+        fig.patch.set_facecolor("white")
+        ax.set_facecolor("white")
 
-    fig, ax = plt.subplots(figsize=(6, 2.8))
-    fig.patch.set_facecolor("white")
-    ax.set_facecolor("white")
+        bars = ax.barh(labels, scores, color=colors, height=0.55, zorder=2)
+        ax.set_xlim(0, 5)
+        ax.set_xticks([1, 2, 3, 4, 5])
+        ax.xaxis.grid(True, color="#E0DED8", linewidth=0.8, zorder=1)
+        ax.set_axisbelow(True)
 
-    bars = ax.barh(labels, scores, color=colors, height=0.55, zorder=2)
-    ax.set_xlim(0, 5)
-    ax.set_xticks([1, 2, 3, 4, 5])
-    ax.xaxis.grid(True, color="#E0DED8", linewidth=0.8, zorder=1)
-    ax.set_axisbelow(True)
+        for bar, score in zip(bars, scores):
+            ax.text(
+                score + 0.08, bar.get_y() + bar.get_height() / 2,
+                f"{score}/5", va="center", fontsize=10, fontweight="bold",
+                color="#1E1E1E", fontfamily="DejaVu Sans",
+            )
 
-    for bar, score in zip(bars, scores):
-        ax.text(
-            score + 0.08, bar.get_y() + bar.get_height() / 2,
-            f"{score}/5", va="center", fontsize=10, fontweight="bold",
-            color="#1E1E1E", fontfamily="DejaVu Sans",
-        )
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_color("#E0DED8")
+        ax.spines["bottom"].set_color("#E0DED8")
+        ax.tick_params(colors="#1E1E1E", labelsize=10)
 
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color("#E0DED8")
-    ax.spines["bottom"].set_color("#E0DED8")
-    ax.tick_params(colors="#1E1E1E", labelsize=10)
+        legend_items = [
+            mpatches.Patch(color="#E53935", label="Критично (1)"),
+            mpatches.Patch(color="#FB8C00", label="Проблемно (2)"),
+            mpatches.Patch(color="#FDD835", label="Внимание (3)"),
+            mpatches.Patch(color="#43A047", label="Хорошо (4)"),
+            mpatches.Patch(color="#1E88E5", label="Отлично (5)"),
+        ]
+        ax.legend(handles=legend_items, loc="lower right", fontsize=7,
+                  framealpha=0.8, edgecolor="#E0DED8")
 
-    legend_items = [
-        mpatches.Patch(color="#E53935", label="Критично (1)"),
-        mpatches.Patch(color="#FB8C00", label="Проблемно (2)"),
-        mpatches.Patch(color="#FDD835", label="Внимание (3)"),
-        mpatches.Patch(color="#43A047", label="Хорошо (4)"),
-        mpatches.Patch(color="#1E88E5", label="Отлично (5)"),
-    ]
-    ax.legend(handles=legend_items, loc="lower right", fontsize=7,
-              framealpha=0.8, edgecolor="#E0DED8")
-
-    plt.tight_layout()
-    return _fig_to_base64(fig)
+        plt.tight_layout()
+        return _fig_to_base64(fig)
+    except Exception:
+        return ""
 
 
 def _risk_chart(top_risks: list[str]) -> str:
     if not top_risks:
         return ""
+    try:
+        labels = [f"Риск {i+1}" for i in range(len(top_risks[:5]))]
+        weights = list(range(len(labels), 0, -1))
 
-    labels = [f"Риск {i+1}" for i in range(len(top_risks[:5]))]
-    weights = list(range(len(labels), 0, -1))
+        fig, ax = plt.subplots(figsize=(6, max(1.8, len(labels) * 0.6)))
+        fig.patch.set_facecolor("white")
+        ax.set_facecolor("white")
 
-    fig, ax = plt.subplots(figsize=(6, max(1.8, len(labels) * 0.6)))
-    fig.patch.set_facecolor("white")
-    ax.set_facecolor("white")
+        colors = ["#E53935", "#FB8C00", "#FDD835", "#43A047", "#1E88E5"][:len(labels)]
+        bars = ax.barh(labels[::-1], weights[::-1], color=colors[::-1], height=0.5, zorder=2)
+        ax.set_xlim(0, max(weights) + 0.5)
+        ax.xaxis.grid(True, color="#E0DED8", linewidth=0.8, zorder=1)
+        ax.set_axisbelow(True)
+        ax.set_xticks([])
 
-    colors = ["#E53935", "#FB8C00", "#FDD835", "#43A047", "#1E88E5"][:len(labels)]
-    bars = ax.barh(labels[::-1], weights[::-1], color=colors[::-1], height=0.5, zorder=2)
-    ax.set_xlim(0, max(weights) + 0.5)
-    ax.xaxis.grid(True, color="#E0DED8", linewidth=0.8, zorder=1)
-    ax.set_axisbelow(True)
-    ax.set_xticks([])
+        for bar, label, risk in zip(bars, labels[::-1], top_risks[:len(labels)][::-1]):
+            truncated = risk[:55] + "…" if len(risk) > 55 else risk
+            ax.text(0.15, bar.get_y() + bar.get_height() / 2,
+                    truncated, va="center", fontsize=9,
+                    color="white", fontweight="500", fontfamily="DejaVu Sans")
 
-    for bar, label, risk in zip(bars, labels[::-1], top_risks[:len(labels)][::-1]):
-        truncated = risk[:55] + "…" if len(risk) > 55 else risk
-        ax.text(0.15, bar.get_y() + bar.get_height() / 2,
-                truncated, va="center", fontsize=9,
-                color="white", fontweight="500", fontfamily="DejaVu Sans")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_visible(False)
+        ax.spines["bottom"].set_color("#E0DED8")
+        ax.set_yticklabels([])
+        ax.tick_params(left=False)
 
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_visible(False)
-    ax.spines["bottom"].set_color("#E0DED8")
-    ax.set_yticklabels([])
-    ax.tick_params(left=False)
-
-    plt.tight_layout()
-    return _fig_to_base64(fig)
+        plt.tight_layout()
+        return _fig_to_base64(fig)
+    except Exception:
+        return ""
 
 
 # ─── HTML renderer ────────────────────────────────────────────────────────────
@@ -212,7 +247,7 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None) 
     try:
         import markdown as md_lib
         body_html = md_lib.markdown(proposal_markdown, extensions=["tables", "fenced_code"])
-    except ImportError:
+    except Exception:
         body_html = _simple_md_to_html(proposal_markdown)
 
     company_info = f"{profile.get('industry', '')} · {profile.get('region', '')} · {profile.get('revenue_range', '')}"

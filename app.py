@@ -17,7 +17,7 @@ from backend.survey import get_base_questions, generate_followup_questions, buil
 from backend.document_parser import parse_document
 from backend.auditor import analyze_business
 from backend.catalog import load_catalog, filter_services, get_services_by_ids
-from backend.proposal_gen import generate_proposal_text, render_html, render_pdf
+from backend.proposal_gen import generate_proposal_text, render_html, render_pdf, _fallback_proposal
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -754,23 +754,38 @@ def page_generating():
         unsafe_allow_html=True,
     )
 
-    catalog           = load_catalog()
-    selected_services = get_services_by_ids(catalog, st.session_state.selected_ids)
+    try:
+        catalog = load_catalog()
+    except Exception:
+        catalog = []
+    selected_services = get_services_by_ids(catalog, st.session_state.selected_ids) if catalog else []
 
     with st.spinner("AI составляет коммерческое предложение с графиками и ROI-обоснованием..."):
-        client      = _get_client()
-        proposal_md = generate_proposal_text(
-            st.session_state.business_profile,
-            st.session_state.assessment,
-            selected_services,
-            client,
-        )
+        try:
+            client = _get_client()
+            proposal_md = generate_proposal_text(
+                st.session_state.business_profile,
+                st.session_state.assessment,
+                selected_services,
+                client,
+            )
+        except Exception as e:
+            st.error(f"Не удалось сгенерировать КП через AI: {e}. Формирую базовый вариант.")
+            proposal_md = _fallback_proposal(
+                st.session_state.business_profile,
+                st.session_state.assessment.get("health_assessment", {}),
+                selected_services,
+            )
         st.session_state.proposal_markdown = proposal_md
-        st.session_state.proposal_html = render_html(
-            proposal_md,
-            st.session_state.business_profile,
-            st.session_state.assessment,   # ← передаём для графиков
-        )
+
+        try:
+            st.session_state.proposal_html = render_html(
+                proposal_md,
+                st.session_state.business_profile,
+                st.session_state.assessment,
+            )
+        except Exception:
+            st.session_state.proposal_html = f"<pre>{proposal_md}</pre>"
 
     _go("proposal")
 

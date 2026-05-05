@@ -95,8 +95,11 @@ BASE_QUESTIONS = [
 ]
 
 
+_ROOT = Path(__file__).parent.parent  # repo root
+
+
 def _load_prompt(name: str) -> dict:
-    path = Path("prompts") / f"{name}.yaml"
+    path = _ROOT / "prompts" / f"{name}.yaml"
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 

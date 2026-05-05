@@ -2,9 +2,11 @@
 import json
 from pathlib import Path
 
+_ROOT = Path(__file__).parent.parent  # repo root
+
 
 def load_catalog() -> list[dict]:
-    path = Path("data") / "services_catalog.json"
+    path = _ROOT / "data" / "services_catalog.json"
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 
