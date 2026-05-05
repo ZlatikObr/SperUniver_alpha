@@ -15,13 +15,47 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from openai import OpenAI
 from backend.survey import get_base_questions, generate_followup_questions, build_business_profile
-from backend.document_parser import parse_document, merge_document_results
+from backend import document_parser
 from backend.auditor import analyze_business
 from backend.catalog import load_catalog, filter_services, get_services_by_ids
 from backend.agent_logger import log_agent_step
 from backend.proposal_gen import generate_proposal_text, render_html, render_pdf, _fallback_proposal
 
 logger = logging.getLogger(__name__)
+
+parse_document = document_parser.parse_document
+
+
+def _merge_document_results(results: list[dict]) -> dict:
+    """Use the parser merge helper when available; keep app boot-safe on stale deploys."""
+    merge_fn = getattr(document_parser, "merge_document_results", None)
+    if callable(merge_fn):
+        return merge_fn(results)
+
+    valid = [r for r in results if r and not r.get("error")]
+    errors = [f"{r.get('filename', 'файл')}: {r.get('error')}" for r in results if r and r.get("error")]
+    if not valid:
+        return {
+            "metrics": {},
+            "summary": "",
+            "facts": [],
+            "quotes": [],
+            "financial_analysis": {"indicators": [], "ratios": [], "risks": [], "summary": ""},
+            "errors": errors,
+            "error": "\n".join(errors) if errors else None,
+        }
+
+    return {
+        "filename": ", ".join(r.get("filename", "файл") for r in valid),
+        "source_files": [r.get("filename", "файл") for r in valid],
+        "metrics": {k: v for r in valid for k, v in (r.get("metrics") or {}).items()},
+        "summary": "\n\n".join(r.get("summary", "") for r in valid if r.get("summary"))[:12000],
+        "facts": [fact for r in valid for fact in (r.get("facts") or [])][:20],
+        "quotes": [quote for r in valid for quote in (r.get("quotes") or [])][:20],
+        "financial_analysis": valid[0].get("financial_analysis", {"indicators": [], "ratios": [], "risks": [], "summary": ""}),
+        "errors": errors,
+        "error": None,
+    }
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -526,7 +560,7 @@ def page_document():
             st.session_state.doc_warnings = []
             st.session_state.last_doc_error = first_error
         else:
-            st.session_state.doc_result = merge_document_results(parsed_results)
+            st.session_state.doc_result = _merge_document_results(parsed_results)
             st.session_state.doc_warnings = st.session_state.doc_result.get("errors", [])
             st.session_state.last_doc_error = ""
             _go("analyzing")
