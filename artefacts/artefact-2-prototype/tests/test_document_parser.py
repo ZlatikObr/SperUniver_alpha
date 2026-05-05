@@ -37,6 +37,43 @@ def test_extract_numeric_mentions_finds_russian_terms():
     assert "клиенты" in metrics
 
 
+def test_dataframe_financial_analysis_calculates_ratios():
+    """Happy path: табличная отчётность превращается в коэффициенты для диагностики."""
+    df = pd.DataFrame({
+        "month": ["2025-01", "2025-02"],
+        "revenue": [1_000_000, 1_200_000],
+        "profit": [100_000, 180_000],
+        "expenses": [900_000, 1_020_000],
+    })
+
+    result = dp._dataframe_to_result(df)
+
+    ratios = result["financial_analysis"]["ratios"]
+    ratio_names = {r["name"] for r in ratios}
+    assert "Рентабельность по прибыли" in ratio_names
+    assert "Динамика выручки" in ratio_names
+    assert result["facts"]
+
+
+def test_merge_document_results_keeps_sources_and_financial_analysis():
+    """Happy path: несколько файлов объединяются без потери фактов и источников."""
+    first = dp.parse_document(
+        "month,revenue,profit\n2025-01,1000000,100000\n".encode("utf-8"),
+        "pnl.csv",
+    )
+    second = dp.parse_document(
+        "месяц,доход\nянварь,100000\n".encode("cp1251"),
+        "sales.csv",
+    )
+
+    merged = dp.merge_document_results([first, second])
+
+    assert merged["error"] is None
+    assert merged["source_files"] == ["pnl.csv", "sales.csv"]
+    assert "pnl.csv" in merged["summary"]
+    assert merged["financial_analysis"]["indicators"]
+
+
 # ── Edge cases ────────────────────────────────────────────────────────────────
 
 def test_parse_csv_handles_cp1251_encoding():
