@@ -1,6 +1,6 @@
 """Business health analysis with deep research enrichment.
 
-Research pipeline (all pre-computed before LLM call):
+Research pipeline (all pre-computed before LLM call, run in parallel):
   1. Zone-specific web searches (5 targeted queries, one per diagnostic zone)
   2. Open structured data: hh.ru vacancies API + CBR key rate
   3. Competitor analysis (2 targeted searches)
@@ -10,6 +10,7 @@ Research pipeline (all pre-computed before LLM call):
 import json
 import yaml
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -341,14 +342,24 @@ def _run_with_tools(system: str, user_content: str, client: OpenAI) -> dict | No
     return None
 
 
-# ── Public API (signature unchanged) ─────────────────────────────────────────
+# ── Public API ────────────────────────────────────────────────────────────────
 
 def analyze_business(
     profile: dict,
     doc_metrics: dict | None,
     client: OpenAI,
     answer_count: int = 10,
+    on_progress=None,           # optional callback(str) for UI progress updates
 ) -> dict:
+    """Run full research pipeline (parallel) then call LLM for 5-zone audit."""
+
+    def _notify(msg: str):
+        if on_progress:
+            try:
+                on_progress(msg)
+            except Exception:
+                pass
+
     if answer_count < 5:
         return _partial_assessment(profile)
 
@@ -356,37 +367,60 @@ def analyze_business(
     has_doc = bool(doc_metrics and doc_metrics.get("summary"))
     data_sources: list[str] = ["опрос"]
 
-    # ── Research pipeline ──────────────────────────────────────────────────
-    research_ctx: dict = {}
+    # ── Research pipeline — all searches run in parallel ───────────────────
+    _notify("🔍 Исследуем рынок: бенчмарки по 5 зонам и конкуренты...")
 
-    # 1. Zone-specific benchmarks (always)
-    research_ctx["zone_benchmarks"] = _run_zone_searches(profile)
+    zone_queries = _build_zone_queries(profile)
+
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        # Zone-specific searches (5)
+        zone_futs = {zone: ex.submit(_web_search, q) for zone, q in zone_queries.items()}
+        # Open data (2)
+        hh_fut   = ex.submit(_fetch_hh_data, profile)
+        cbr_fut  = ex.submit(_fetch_cbr_rate)
+        # Competitor analysis (runs 2 searches internally)
+        comp_fut = ex.submit(_research_competitors, profile)
+        # Macro phase 1 (runs 2 searches internally)
+        mac_fut  = ex.submit(_run_phase1_macro, profile)
+        # Micro phase 2 (runs 1 search internally)
+        mic_fut  = ex.submit(_run_phase2_micro, profile)
+        # Doc benchmarks (if document uploaded)
+        doc_fut  = ex.submit(_run_doc_benchmarks, profile, doc_metrics) if has_doc else None
+
+        zone_benchmarks = {zone: f.result() for zone, f in zone_futs.items()}
+        hh_data  = hh_fut.result()
+        cbr      = cbr_fut.result()
+        competitors = comp_fut.result()
+        macro    = mac_fut.result()
+        micro    = mic_fut.result()
+        doc_benchmarks = doc_fut.result() if doc_fut else ""
+
+    # Build data_sources list
     data_sources.append("отраслевые бенчмарки (web)")
-
-    # 2. Open structured data: hh.ru + CBR
-    research_ctx["open_data"] = _fetch_open_data(profile)
-    if research_ctx["open_data"].get("hh", {}).get("vacancy_count"):
+    if hh_data.get("vacancy_count"):
         data_sources.append("hh.ru")
-
-    # 3. Competitor analysis
-    research_ctx["competitors"] = _research_competitors(profile)
-
-    # 4. Doc + web combined (extra benchmarks when document uploaded)
     if has_doc:
         data_sources.append("загруженный документ")
-        research_ctx["doc_benchmarks"] = _run_doc_benchmarks(profile, doc_metrics)
         data_sources.append("бенчмарки по метрикам документа (web)")
 
-    # 5. Two-phase macro/micro research
-    research_ctx["macro"] = _run_phase1_macro(profile)
-    research_ctx["micro"] = _run_phase2_micro(profile)
+    research_ctx: dict = {
+        "zone_benchmarks": zone_benchmarks,
+        "open_data": {"hh": hh_data, "cbr_key_rate_snippet": cbr},
+        "competitors": competitors,
+        "macro": macro,
+        "micro": micro,
+    }
+    if has_doc:
+        research_ctx["doc_benchmarks"] = doc_benchmarks
 
-    # ── LLM call with rich context ─────────────────────────────────────────
+    # ── LLM call with rich pre-computed context ────────────────────────────
+    _notify("🤖 AI строит диагностику по 5 зонам...")
+
     user_content = _build_user_message(profile, doc_metrics, research_ctx)
     result = _call_llm_direct(prompt["system"], user_content, client)
 
     if result is None:
-        # Fallback: let LLM drive its own searches on plain message
+        # Fallback: let LLM drive its own searches
         fallback_content = _build_user_message(profile, doc_metrics, None)
         result = _run_with_tools(prompt["system"], fallback_content, client)
 
