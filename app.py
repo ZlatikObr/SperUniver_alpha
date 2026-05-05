@@ -522,19 +522,36 @@ def page_analyzing():
 
     st.markdown(
         '<h2 style="font-size:22px;font-weight:700;color:#1E1E1E;margin-bottom:4px;">Анализирую бизнес</h2>'
-        '<p style="font-size:13px;color:#7b7b78;margin-bottom:1.5rem;">Займёт 1–2 минуты</p>',
+        '<p style="font-size:13px;color:#7b7b78;margin-bottom:1.5rem;">~30–60 секунд</p>',
         unsafe_allow_html=True,
     )
 
-    with st.spinner("AI анализирует данные по 5 зонам..."):
-        client  = _get_client()
-        profile = build_business_profile(st.session_state.base_answers, st.session_state.followup_answers, client)
+    client = _get_client()
+
+    with st.status("Запускаю исследование...", expanded=True) as status:
+        status.update(label="🧠 Строю профиль бизнеса...")
+        profile = build_business_profile(
+            st.session_state.base_answers,
+            st.session_state.followup_answers,
+            client,
+        )
         st.session_state.business_profile = profile
 
         answer_count = len(st.session_state.base_answers) + len(st.session_state.followup_answers)
-        assessment   = analyze_business(profile, st.session_state.doc_result, client, answer_count=answer_count)
+
+        def on_progress(msg: str):
+            status.update(label=msg)
+
+        assessment = analyze_business(
+            profile,
+            st.session_state.doc_result,
+            client,
+            answer_count=answer_count,
+            on_progress=on_progress,
+        )
         st.session_state.assessment = assessment
 
+        status.update(label="📋 Формирую витрину услуг...")
         zones         = assessment.get("health_assessment", {}).get("zones", [])
         risk_zone_ids = [z["name"] for z in zones if z.get("score", 5) <= 3]
         if not risk_zone_ids:
@@ -543,6 +560,8 @@ def page_analyzing():
         catalog  = load_catalog()
         filtered = filter_services(catalog, risk_zone_ids, profile.get("industry", ""))
         st.session_state.catalog_services = filtered
+
+        status.update(label="✅ Анализ завершён!", state="complete", expanded=False)
 
     _go("diagnostics")
 
