@@ -77,6 +77,8 @@ CSS = """
 /* ── Global ── */
 html, body, [class*="css"] {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
 }
 
 /* ── App background + dot grid ── */
@@ -138,6 +140,26 @@ p, li, label,
     color: #1E1E1E !important;
 }
 .stCaption, [data-testid="stCaptionContainer"] p { color: #7b7b78 !important; }
+
+/* ── Hard wrapping guard for generated AI text ── */
+.stMarkdown, .stMarkdown *,
+[data-testid="stMarkdownContainer"],
+[data-testid="stMarkdownContainer"] *,
+[data-testid="stExpander"],
+[data-testid="stExpander"] *,
+[data-testid="column"] {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+}
+
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] span,
+[data-testid="stMarkdownContainer"] blockquote {
+    white-space: normal !important;
+}
 
 /* ── Primary buttons ── */
 .stButton > button[kind="primary"],
@@ -326,7 +348,7 @@ def _logo():
         """
         <div style="margin-bottom:2rem;">
           <div style="display:flex;align-items:center;gap:8px;">
-            <span style="font-size:22px;font-weight:800;letter-spacing:-0.5px;color:#1E1E1E;">ПУЛЬС</span>
+            <span style="font-size:22px;font-weight:800;letter-spacing:0;color:#1E1E1E;">ПУЛЬС</span>
             <span style="width:8px;height:8px;border-radius:50%;background:#FF5600;display:inline-block;
                          animation:pulse-dot 2s infinite;"></span>
           </div>
@@ -378,7 +400,7 @@ def page_welcome():
     st.markdown(
         """
         <div style="margin-bottom:2.5rem;">
-          <h1 style="font-size:38px;font-weight:800;line-height:1.1;color:#1E1E1E;letter-spacing:-1.5px;margin-bottom:14px;">
+          <h1 style="font-size:38px;font-weight:800;line-height:1.1;color:#1E1E1E;letter-spacing:0;margin-bottom:14px;">
             Диагностика бизнеса<br>за&nbsp;20&nbsp;минут
           </h1>
           <p style="font-size:16px;color:#7b7b78;line-height:1.65;max-width:480px;">
@@ -735,10 +757,13 @@ def page_diagnostics():
         _section("ПРИОРИТЕТНЫЕ РИСКИ")
         for i, risk in enumerate(top_risks[:3], 1):
             st.markdown(
-                f'<div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:10px;">'
+                f'<div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:10px;'
+                f'width:100%;min-width:0;max-width:100%;">'
                 f'<span style="background:#FF5600;color:#fff;border-radius:4px;padding:1px 8px;'
-                f'font-size:12px;font-weight:700;min-width:22px;text-align:center;">{i}</span>'
-                f'<span style="font-size:14px;color:#1E1E1E;line-height:1.5;">{risk}</span></div>',
+                f'font-size:12px;font-weight:700;min-width:22px;text-align:center;flex:0 0 auto;">{i}</span>'
+                f'<span style="font-size:14px;color:#1E1E1E;line-height:1.5;display:block;'
+                f'flex:1 1 auto;min-width:0;max-width:100%;white-space:normal;'
+                f'overflow-wrap:anywhere;word-break:break-word;">{risk}</span></div>',
                 unsafe_allow_html=True,
             )
 
@@ -821,15 +846,18 @@ def page_catalog():
         with col2:
             st.markdown(
                 f'<div style="background:#fff;border:{card_border};border-radius:10px;'
-                f'padding:16px 20px;margin-bottom:2px;transition:box-shadow 0.2s;">'
-                f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:6px;">'
+                f'padding:16px 20px;margin-bottom:2px;transition:box-shadow 0.2s;'
+                f'min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word;">'
+                f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:6px;min-width:0;">'
                 f'<span style="background:{zone_color}15;color:{zone_color};border:1px solid {zone_color}30;'
                 f'border-radius:4px;padding:1px 8px;font-size:11px;font-weight:600;">{zone.capitalize()}</span>'
-                f'<span style="font-size:14px;font-weight:600;color:#1E1E1E;">{svc["name"]}</span>'
+                f'<span style="font-size:14px;font-weight:600;color:#1E1E1E;min-width:0;'
+                f'max-width:100%;overflow-wrap:anywhere;word-break:break-word;">{svc["name"]}</span>'
                 f'{top_badge}'
                 f'</div>'
-                f'<p style="font-size:13px;color:#7b7b78;margin-bottom:10px;line-height:1.5;">{svc["description"]}</p>'
-                f'<div style="display:flex;gap:20px;font-size:12px;">'
+                f'<p style="font-size:13px;color:#7b7b78;margin-bottom:10px;line-height:1.5;'
+                f'overflow-wrap:anywhere;word-break:break-word;">{svc["description"]}</p>'
+                f'<div style="display:flex;flex-wrap:wrap;gap:12px 20px;font-size:12px;min-width:0;">'
                 f'<span><b style="color:#1E1E1E;">{svc.get("price_range","—")}</b>'
                 f' <span style="color:#7b7b78;">стоимость</span></span>'
                 f'<span><b style="color:#1E1E1E;">{svc.get("duration","—")}</b>'

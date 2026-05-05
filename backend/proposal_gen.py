@@ -109,11 +109,11 @@ def _build_package_summary(selected_services: list[dict]) -> str:
     if same_pkg:
         # Only one scenario to show
         block = f"""
-<div style="margin:24px 0 32px;border-radius:12px;overflow:hidden;font-family:Arial,sans-serif;">
+<div style="margin:24px 0 32px;border-radius:12px;overflow:hidden;font-family:Arial,sans-serif;max-width:100%;overflow-wrap:anywhere;word-break:break-word;">
   <div style="background:#1E1E1E;color:#fff;padding:18px 24px;">
     <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;
                 color:#FF5600;font-weight:700;margin-bottom:6px;">Ваш пакет · {len(selected_services)} услуги</div>
-    <div style="font-size:22px;font-weight:800;letter-spacing:-0.5px;">
+    <div style="font-size:22px;font-weight:800;letter-spacing:0;overflow-wrap:anywhere;word-break:break-word;">
       {_format_rub(fp_lo)} – {_format_rub(fp_hi)}
     </div>
     <div style="font-size:13px;color:#ccc;margin-top:4px;">
@@ -125,33 +125,33 @@ def _build_package_summary(selected_services: list[dict]) -> str:
     else:
         block = f"""
 <div style="margin:24px 0 32px;border-radius:12px;overflow:hidden;
-            font-family:Arial,sans-serif;border:1px solid #E0DED8;">
-  <div style="display:grid;grid-template-columns:1fr 1fr;">
+            font-family:Arial,sans-serif;border:1px solid #E0DED8;max-width:100%;overflow-wrap:anywhere;word-break:break-word;">
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);">
 
-    <div style="background:#1E1E1E;color:#fff;padding:22px 24px;border-right:1px solid #333;">
+    <div style="background:#1E1E1E;color:#fff;padding:22px 24px;border-right:1px solid #333;min-width:0;overflow-wrap:anywhere;word-break:break-word;">
       <div style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;
                   color:#FF5600;font-weight:700;margin-bottom:8px;">
         ★ Минимальный пакет · топ-3 по ROI
       </div>
-      <div style="font-size:24px;font-weight:800;letter-spacing:-0.5px;line-height:1.1;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0;line-height:1.1;overflow-wrap:anywhere;word-break:break-word;">
         {_format_rub(mp_lo)}<br>
         <span style="font-size:16px;font-weight:500;color:#aaa;">до {_format_rub(mp_hi)}</span>
       </div>
       <div style="font-size:13px;color:#ccc;margin-top:8px;">
         ROI: <b style="color:#FF5600;">{mr_lo}–{mr_hi}%</b>
       </div>
-      <div style="font-size:11px;color:#888;margin-top:10px;line-height:1.5;">
+      <div style="font-size:11px;color:#888;margin-top:10px;line-height:1.5;overflow-wrap:anywhere;word-break:break-word;">
         {min_names}
       </div>
     </div>
 
-    <div style="background:#F7F7F5;padding:22px 24px;">
+    <div style="background:#F7F7F5;padding:22px 24px;min-width:0;overflow-wrap:anywhere;word-break:break-word;">
       <div style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;
                   color:#7b7b78;font-weight:700;margin-bottom:8px;">
         Полный пакет · все {len(selected_services)} услуг
       </div>
-      <div style="font-size:24px;font-weight:800;letter-spacing:-0.5px;
-                  color:#1E1E1E;line-height:1.1;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0;
+                  color:#1E1E1E;line-height:1.1;overflow-wrap:anywhere;word-break:break-word;">
         {_format_rub(fp_lo)}<br>
         <span style="font-size:16px;font-weight:500;color:#7b7b78;">до {_format_rub(fp_hi)}</span>
       </div>
@@ -601,14 +601,16 @@ def _risk_html(top_risks: list[str]) -> str:
         label = labels[i]
         risk_text = html_lib.escape(_risk_display_text(risk))
         rows += (
-            f'<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:10px;">'
+            f'<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:10px;'
+            f'width:100%;min-width:0;max-width:100%;">'
             f'<div style="min-width:28px;height:28px;border-radius:6px;background:{color};'
             f'color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;'
             f'justify-content:center;flex-shrink:0;">{i+1}</div>'
-            f'<div style="flex:1;">'
+            f'<div style="flex:1 1 auto;min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word;">'
             f'<span style="font-size:10px;font-weight:700;color:{color};text-transform:uppercase;'
             f'letter-spacing:0.06em;">{label}</span>'
-            f'<div style="font-size:13px;color:#1E1E1E;line-height:1.55;margin-top:2px;">{risk_text}</div>'
+            f'<div style="font-size:13px;color:#1E1E1E;line-height:1.55;margin-top:2px;'
+            f'white-space:normal;overflow-wrap:anywhere;word-break:break-word;max-width:100%;">{risk_text}</div>'
             f'</div></div>'
         )
     return (
@@ -718,9 +720,11 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None) 
 <title>КП — Пульс</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: 'Inter', Arial, sans-serif; font-size: 14px; color: #1E1E1E; background: #fff; }}
-  .wrapper {{ max-width: 820px; margin: 0 auto; padding: 48px 56px; }}
+  * {{ box-sizing: border-box; margin: 0; padding: 0; min-width: 0; }}
+  html, body {{ max-width: 100%; overflow-x: hidden; }}
+  body {{ font-family: 'Inter', Arial, sans-serif; font-size: 14px; color: #1E1E1E; background: #fff;
+          overflow-wrap: anywhere; word-break: break-word; }}
+  .wrapper {{ max-width: 820px; margin: 0 auto; padding: 48px 56px; overflow-x: hidden; }}
 
   /* Header */
   .header {{ display: flex; justify-content: space-between; align-items: flex-start;
@@ -736,27 +740,33 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None) 
         margin: 32px 0 14px; padding-left: 12px;
         border-left: 3px solid #FF5600; }}
   h3 {{ font-size: 14px; font-weight: 600; color: #1E1E1E; margin: 18px 0 8px; }}
-  p {{ line-height: 1.75; margin-bottom: 10px; color: #1E1E1E; }}
+  p {{ line-height: 1.75; margin-bottom: 10px; color: #1E1E1E; overflow-wrap: anywhere; word-break: break-word; }}
   ul, ol {{ padding-left: 20px; margin-bottom: 14px; }}
-  li {{ line-height: 1.75; margin-bottom: 4px; }}
+  li {{ line-height: 1.75; margin-bottom: 4px; overflow-wrap: anywhere; word-break: break-word; }}
   strong {{ color: #1E1E1E; font-weight: 600; }}
 
   /* Tables */
-  table {{ width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 12px; table-layout: fixed; }}
-  th {{ background: #1E1E1E; color: #fff; padding: 10px 14px; text-align: left; font-weight: 600; }}
-  td {{ padding: 10px 14px; border-bottom: 1px solid #E0DED8; vertical-align: top; overflow-wrap: anywhere; }}
+  table {{ width: 100%; max-width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 12px;
+           table-layout: fixed; overflow-wrap: anywhere; word-break: break-word; }}
+  th {{ background: #1E1E1E; color: #fff; padding: 10px 14px; text-align: left; font-weight: 600;
+        overflow-wrap: anywhere; word-break: break-word; white-space: normal; }}
+  td {{ padding: 10px 14px; border-bottom: 1px solid #E0DED8; vertical-align: top;
+        overflow-wrap: anywhere; word-break: break-word; white-space: normal; max-width: 0; }}
   tr:nth-child(even) td {{ background: #F7F7F5; }}
 
   /* Charts */
   .charts-section {{ margin: 32px 0; }}
-  .charts-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px; }}
-  .chart-card {{ background: #F7F7F5; border: 1px solid #E0DED8; border-radius: 8px; padding: 20px; }}
+  .charts-grid {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; margin-top: 16px; }}
+  .chart-card {{ background: #F7F7F5; border: 1px solid #E0DED8; border-radius: 8px; padding: 20px;
+                 min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; overflow: hidden; }}
   .chart-card h3 {{ font-size: 13px; color: #7b7b78; font-weight: 600;
                     text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 14px; }}
   .chart-full {{ grid-column: 1 / -1; }}
   .risk-list {{ list-style: none; padding-left: 0; margin: 12px 0 0; }}
   .risk-list li {{ display: flex; gap: 10px; align-items: flex-start; margin-bottom: 8px;
-                   color: #1E1E1E; line-height: 1.55; }}
+                   color: #1E1E1E; line-height: 1.55; min-width: 0; max-width: 100%;
+                   overflow-wrap: anywhere; word-break: break-word; }}
+  .risk-list li span:last-child {{ min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }}
   .risk-num {{ flex: 0 0 auto; min-width: 22px; height: 22px; border-radius: 4px;
                background: #FF5600; color: #fff; font-size: 11px; font-weight: 700;
                display: inline-flex; align-items: center; justify-content: center; }}
@@ -774,7 +784,14 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None) 
   @media print {{
     body {{ font-size: 12px; }}
     .wrapper {{ padding: 24px 28px; }}
-    .charts-grid {{ grid-template-columns: 1fr 1fr; }}
+    .charts-grid {{ grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }}
+  }}
+
+  @media (max-width: 720px) {{
+    .wrapper {{ padding: 28px 18px; }}
+    .header {{ flex-direction: column; gap: 10px; }}
+    .header-meta {{ text-align: left; }}
+    .charts-grid {{ grid-template-columns: minmax(0, 1fr); }}
   }}
 </style>
 </head>

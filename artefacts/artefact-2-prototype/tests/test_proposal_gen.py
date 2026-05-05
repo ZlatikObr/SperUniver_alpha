@@ -102,6 +102,17 @@ def test_simple_md_to_html_renders_tables():
     assert "<td>Аудит</td>" in html
 
 
+def test_risk_html_wraps_long_generated_text():
+    """Edge case: длинный AI-текст риска не должен вылезать из карточки."""
+    long_risk = "ОченьДлинныйРискБезПробелов" * 12
+    html = pg._risk_html([long_risk])
+
+    assert long_risk in html
+    assert "min-width:0" in html
+    assert "overflow-wrap:anywhere" in html
+    assert "word-break:break-word" in html
+
+
 # ── Negative ──────────────────────────────────────────────────────────────────
 
 def test_generate_proposal_text_falls_back_when_llm_raises(monkeypatch):
