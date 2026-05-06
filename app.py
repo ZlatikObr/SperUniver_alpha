@@ -403,7 +403,7 @@ def page_welcome():
         """
         <div style="margin-bottom:2.5rem;">
           <h1 style="font-size:38px;font-weight:800;line-height:1.1;color:#1E1E1E;letter-spacing:0;margin-bottom:14px;">
-            Диагностика бизнеса<br>за&nbsp;20&nbsp;минут
+            Диагностика бизнеса<br>за&nbsp;7&nbsp;минут
           </h1>
           <p style="font-size:16px;color:#7b7b78;line-height:1.65;max-width:480px;">
             Ответьте на вопросы — получите анализ по 5 зонам и готовое коммерческое предложение с ROI-обоснованием.
