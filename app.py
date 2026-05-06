@@ -930,6 +930,7 @@ def page_generating():
                 proposal_md,
                 st.session_state.business_profile,
                 st.session_state.assessment,
+                selected_services=selected_services,
             )
             st.session_state.proposal_render_version = REPORT_RENDER_VERSION
         except Exception as exc:

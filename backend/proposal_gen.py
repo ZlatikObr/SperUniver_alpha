@@ -173,17 +173,14 @@ def _build_services_section(selected_services: list[dict]) -> str:
     """
     Build the services block programmatically — 100% guaranteed to include
     every service the user selected, regardless of LLM token limits.
-    Prepends an investment summary (min / full package) before the table.
+    NOTE: the investment summary card is injected directly into HTML in render_html()
+    to avoid being stripped by the Markdown parser.
     """
     if not selected_services:
         return ""
 
-    summary = _build_package_summary(selected_services)
-
     lines = [
         "## Предлагаемые услуги",
-        "",
-        summary,
         "",
         "| Услуга | Задача | Методология | Ожидаемый результат | ROI / срок |",
         "|---|---|---|---|---|",
@@ -670,7 +667,8 @@ def _zone_explanations_html(zones: list[dict]) -> str:
 
 # ─── HTML renderer ────────────────────────────────────────────────────────────
 
-def render_html(proposal_markdown: str, profile: dict, assessment: dict = None) -> str:
+def render_html(proposal_markdown: str, profile: dict, assessment: dict = None,
+                selected_services: list = None) -> str:
     try:
         import markdown as md_lib
         body_html = md_lib.markdown(proposal_markdown, extensions=["tables", "fenced_code"])
@@ -678,6 +676,18 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None) 
         logger.warning("Markdown package rendering failed; using simple renderer.", exc_info=True)
         log_agent_step("proposal_gen.render_html", "markdown_fallback", error=exc)
         body_html = _simple_md_to_html(proposal_markdown)
+
+    # Inject investment summary card directly into HTML (bypasses Markdown parser stripping)
+    if selected_services:
+        summary_html = _build_package_summary(selected_services)
+        if summary_html:
+            # Find the "Предлагаемые услуги" heading and inject right after it
+            import re as _re
+            heading_pattern = _re.compile(
+                r'(<h2[^>]*>[^<]*[Пп]редлагаемые\s+услуги[^<]*</h2>)',
+                _re.IGNORECASE
+            )
+            body_html = heading_pattern.sub(r'\1' + summary_html, body_html, count=1)
 
     company_info = f"{profile.get('industry', '')} · {profile.get('region', '')} · {profile.get('revenue_range', '')}"
     today = date.today().strftime("%d.%m.%Y")
