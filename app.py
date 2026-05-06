@@ -565,7 +565,9 @@ def page_document():
     st.markdown(
         '<h2 style="font-size:22px;font-weight:700;color:#1E1E1E;margin-bottom:4px;">Финансовые данные</h2>'
         '<p style="font-size:13px;color:#7b7b78;margin-bottom:1.5rem;">'
-        'Прикрепите отчётность для более точного анализа — можно загрузить несколько PDF, CSV или Excel.</p>',
+        'Для более точной диагностики загрузите управленческий P&L/ОПиУ, ДДС/cash-flow, баланс, '
+        'оборотно-сальдовую ведомость, выгрузку продаж/выручки, структуру затрат или маркетинговый отчёт '
+        'с CAC/LTV. Можно добавить несколько PDF, CSV или Excel.</p>',
         unsafe_allow_html=True,
     )
 
