@@ -221,6 +221,67 @@ def _run_phase2_micro(profile: dict) -> str:
     return _web_search(q)
 
 
+# ── User quotes extraction ────────────────────────────────────────────────────
+
+def _extract_user_quotes(profile: dict) -> list[dict]:
+    """Extract open-text survey answers as structured quotes for LLM evidence."""
+    QUOTE_FIELDS = [
+        ("main_challenge", "Главная проблема (ответ клиента)"),
+        ("team_challenge", "Сложности с командой (ответ клиента)"),
+        ("client_satisfaction", "Удовлетворённость клиентов (ответ клиента)"),
+        ("process_maturity", "Зрелость процессов (ответ клиента)"),
+        ("additional_context", "Уточняющие ответы клиента"),
+    ]
+    quotes = []
+    for field, label in QUOTE_FIELDS:
+        value = profile.get(field, "")
+        if isinstance(value, str) and len(value.strip()) > 15:
+            quotes.append({"source": "опрос", "label": label, "text": value.strip()})
+    return quotes
+
+
+# ── Company profile research ──────────────────────────────────────────────────
+
+def _research_company_profile(profile: dict) -> dict:
+    """
+    Search for public data about the company.
+    Returns dict with keys: financials, profile_info, source_urls.
+    """
+    import re
+
+    # Try to extract company name from main_challenge text
+    text = profile.get("main_challenge", "") + " " + profile.get("additional_context", "")
+
+    company_name = ""
+    # Pattern: ООО/ИП/АО + name in quotes or after space
+    m = re.search(r'(?:ООО|ИП|АО|ЗАО|ПАО)\s+[«"]?([А-ЯЁA-Za-zА-яё\s]{2,30})[»"]?', text)
+    if m:
+        company_name = m.group(0).strip()
+    # Pattern: "мы — CompanyName" or "сеть CompanyName"
+    if not company_name:
+        m = re.search(r'(?:сеть|компания|стартап|бренд)\s+[«"]([^»"\n]{2,30})[»"]', text, re.IGNORECASE)
+        if m:
+            company_name = m.group(1).strip()
+
+    industry = profile.get("industry", "")
+    region = profile.get("region", "Россия")
+    results = {}
+
+    if company_name:
+        r1 = _web_search(f"{company_name} выручка финансы отчётность сотрудников офисы")
+        r2 = _web_search(f"{company_name} официальный сайт продукты услуги")
+        results["company_name"] = company_name
+        results["company_financials"] = r1[:800] if "недоступен" not in r1 else "не найдено"
+        results["company_profile_info"] = r2[:600] if "недоступен" not in r2 else "не найдено"
+
+    # Industry + region enrichment regardless
+    if industry:
+        r3 = _web_search(f"публичные компании рынок {industry} {region} объём выручки показатели {YEAR}")
+        results["industry_public_data"] = r3[:600] if "недоступен" not in r3 else "не найдено"
+
+    return results
+
+
 # ── Build rich user message for LLM ──────────────────────────────────────────
 
 def _build_user_message(
@@ -228,36 +289,54 @@ def _build_user_message(
     doc_metrics: dict | None,
     research_ctx: dict | None = None,
 ) -> str:
+    # Extract user quotes first
+    user_quotes = _extract_user_quotes(profile)
+
     parts = ["## Профиль бизнеса\n"]
     for k, v in profile.items():
         if v:
             parts.append(f"- **{k}**: {v}")
 
+    # Inject user quotes section before doc metrics
+    if user_quotes:
+        parts.append("\n## Прямые цитаты из опроса клиента")
+        parts.append("Используй эти цитаты в evidence как «цитата» → вывод\n")
+        for q in user_quotes:
+            parts.append(f"- [{q['label']}]: «{q['text']}»")
+
     if doc_metrics and doc_metrics.get("summary"):
-        parts.append("\n## Данные из документа\n")
         source_files = doc_metrics.get("source_files") or [doc_metrics.get("filename")]
         source_files = [s for s in source_files if s]
+        source_file = source_files[0] if source_files else "документ"
+        filename_label = ", ".join(source_files) if source_files else "документ"
+
+        parts.append(f"\n## Данные из документа: {filename_label}\n")
         if source_files:
-            parts.append(f"Файлы: {', '.join(source_files)}")
+            parts.append(f"Файлы: {filename_label}")
+
         if doc_metrics.get("metrics"):
+            parts.append(f"\n### Финансовые показатели [Источник: {source_file}]")
             for k, v in list(doc_metrics["metrics"].items())[:15]:
-                parts.append(f"- {k}: {v}")
+                parts.append(f"- {k}: {v} [Источник: {source_file}]")
+
         if doc_metrics.get("facts"):
-            parts.append("\nФакты и цитаты из файлов:")
+            parts.append(f"\n### Факты и выдержки [Источник: {source_file}]")
             for fact in doc_metrics.get("facts", [])[:12]:
-                parts.append(f"- {fact}")
+                parts.append(f"- «{fact}» [Источник: {source_file}]")
+
         financial_analysis = doc_metrics.get("financial_analysis") or {}
         if financial_analysis.get("indicators") or financial_analysis.get("ratios"):
-            parts.append("\nФинансовый анализ по приложенным файлам:")
+            parts.append(f"\n### Финансовый анализ по приложенным файлам [Источник: {source_file}]")
             for indicator in financial_analysis.get("indicators", [])[:8]:
+                ind_source = indicator.get("source") or source_file
                 parts.append(
                     f"- {indicator.get('name')}: {indicator.get('value')} "
-                    f"(факт: {indicator.get('fact', 'нет цитаты')})"
+                    f"(факт: {indicator.get('fact', 'нет цитаты')}) [Источник: {ind_source}]"
                 )
             for ratio in financial_analysis.get("ratios", [])[:8]:
                 parts.append(
                     f"- {ratio.get('name')}: {ratio.get('value')} — "
-                    f"{ratio.get('interpretation', '')}"
+                    f"{ratio.get('interpretation', '')} [Источник: {source_file}]"
                 )
             for risk in financial_analysis.get("risks", [])[:5]:
                 parts.append(f"- Финансовый риск: {risk}")
@@ -299,6 +378,19 @@ def _build_user_message(
             parts.append(f"### Макроконтекст отрасли\n{research_ctx['macro'][:600]}")
         if research_ctx.get("micro") and "недоступен" not in research_ctx["micro"]:
             parts.append(f"### Контекст по ключевой боли клиента\n{research_ctx['micro'][:600]}")
+
+        # Company profile from open sources
+        if research_ctx.get("company_profile"):
+            cp = research_ctx["company_profile"]
+            parts.append("\n## Профиль компании из открытых источников\n")
+            if cp.get("company_name"):
+                parts.append(f"**Компания:** {cp['company_name']}")
+            if cp.get("company_financials") and cp["company_financials"] != "не найдено":
+                parts.append(f"### Финансовые данные компании (web)\n{cp['company_financials'][:600]}")
+            if cp.get("company_profile_info") and cp["company_profile_info"] != "не найдено":
+                parts.append(f"### Общий профиль компании (web)\n{cp['company_profile_info'][:400]}")
+            if cp.get("industry_public_data") and cp["industry_public_data"] != "не найдено":
+                parts.append(f"### Публичные данные по рынку отрасли (web)\n{cp['industry_public_data'][:400]}")
     else:
         parts.append(
             "\n*Документ не прикреплён. Используй функцию web_search "
@@ -537,16 +629,18 @@ def analyze_business(
     macro: str = ""
     micro: str = ""
     doc_benchmarks: str = ""
+    company_profile_data: dict = {}
 
     try:
         with ThreadPoolExecutor(max_workers=2) as ex:
-            zone_futs = {zone: ex.submit(_web_search, q) for zone, q in zone_queries.items()}
-            hh_fut    = ex.submit(_fetch_hh_data, profile)
-            cbr_fut   = ex.submit(_fetch_cbr_rate)
-            comp_fut  = ex.submit(_research_competitors, profile)
-            mac_fut   = ex.submit(_run_phase1_macro, profile)
-            mic_fut   = ex.submit(_run_phase2_micro, profile)
-            doc_fut   = ex.submit(_run_doc_benchmarks, profile, doc_metrics) if has_doc else None
+            zone_futs   = {zone: ex.submit(_web_search, q) for zone, q in zone_queries.items()}
+            hh_fut      = ex.submit(_fetch_hh_data, profile)
+            cbr_fut     = ex.submit(_fetch_cbr_rate)
+            comp_fut    = ex.submit(_research_competitors, profile)
+            mac_fut     = ex.submit(_run_phase1_macro, profile)
+            mic_fut     = ex.submit(_run_phase2_micro, profile)
+            doc_fut     = ex.submit(_run_doc_benchmarks, profile, doc_metrics) if has_doc else None
+            company_fut = ex.submit(_research_company_profile, profile)
 
             for zone, f in zone_futs.items():
                 try:
@@ -599,6 +693,14 @@ def analyze_business(
                     log_agent_step("auditor.doc_benchmarks", "error", error=exc)
                     doc_benchmarks = ""
 
+            company_profile_data: dict = {}
+            try:
+                company_profile_data = company_fut.result(timeout=25)
+            except Exception as exc:
+                logger.warning("Company profile research failed.", exc_info=True)
+                log_agent_step("auditor.company_profile", "error", error=exc)
+                company_profile_data = {}
+
     except Exception as exc:
         logger.warning("Research pipeline failed; continuing with empty context.", exc_info=True)
         log_agent_step("auditor.research_pipeline", "error", error=exc)
@@ -620,6 +722,9 @@ def analyze_business(
     }
     if has_doc:
         research_ctx["doc_benchmarks"] = doc_benchmarks
+    if company_profile_data:
+        research_ctx["company_profile"] = company_profile_data
+        data_sources.append("профиль компании (web)")
 
     # ── LLM call with rich pre-computed context ────────────────────────────
     _notify("🤖 AI строит диагностику по 5 зонам...")
