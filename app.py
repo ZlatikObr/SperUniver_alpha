@@ -799,27 +799,75 @@ def _parse_roi_min(roi_str: str) -> int:
     return int(nums[0]) if nums else 0
 
 
+def _render_service_card(svc: dict, zone_colors: dict, is_top: bool, default_checked: bool, key_prefix: str = "svc") -> bool:
+    """Render a single service card with checkbox. Returns True if checked."""
+    zone       = svc.get("zone", "")
+    zone_color = zone_colors.get(zone, "#7b7b78")
+
+    top_badge = (
+        '<span style="background:#FF5600;color:#fff;border-radius:4px;'
+        'padding:2px 10px;font-size:11px;font-weight:700;letter-spacing:0.02em;">'
+        '★ Рекомендуем для максимального результата</span>'
+    ) if is_top else ""
+
+    card_border = "2px solid #FF5600" if is_top else "1px solid #E0DED8"
+
+    col1, col2 = st.columns([0.06, 0.94])
+    with col1:
+        checked = st.checkbox(
+            "выбрать", key=f"{key_prefix}_{svc['id']}",
+            value=default_checked, label_visibility="collapsed",
+        )
+    with col2:
+        st.markdown(
+            f'<div style="background:#fff;border:{card_border};border-radius:10px;'
+            f'padding:16px 20px;margin-bottom:2px;transition:box-shadow 0.2s;'
+            f'min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word;">'
+            f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:6px;min-width:0;">'
+            f'<span style="background:{zone_color}15;color:{zone_color};border:1px solid {zone_color}30;'
+            f'border-radius:4px;padding:1px 8px;font-size:11px;font-weight:600;">{zone.capitalize()}</span>'
+            f'<span style="font-size:14px;font-weight:600;color:#1E1E1E;min-width:0;'
+            f'max-width:100%;overflow-wrap:anywhere;word-break:break-word;">{svc["name"]}</span>'
+            f'{top_badge}'
+            f'</div>'
+            f'<p style="font-size:13px;color:#7b7b78;margin-bottom:10px;line-height:1.5;'
+            f'overflow-wrap:anywhere;word-break:break-word;">{svc["description"]}</p>'
+            f'<div style="display:flex;flex-wrap:wrap;gap:12px 20px;font-size:12px;min-width:0;">'
+            f'<span><b style="color:#1E1E1E;">{svc.get("price_range","—")}</b>'
+            f' <span style="color:#7b7b78;">стоимость</span></span>'
+            f'<span><b style="color:#1E1E1E;">{svc.get("duration","—")}</b>'
+            f' <span style="color:#7b7b78;">срок</span></span>'
+            f'<span><b style="color:#FF5600;">{svc.get("roi_estimate","—")}</b>'
+            f' <span style="color:#7b7b78;">ROI</span></span>'
+            f'</div></div>',
+            unsafe_allow_html=True,
+        )
+    return checked
+
+
 def page_catalog():
     _logo()
     _progress("catalog")
 
-    services = st.session_state.catalog_services
-    if not services:
+    recommended_services = st.session_state.catalog_services
+    if not recommended_services:
         st.warning("Услуги не найдены.")
         if st.button("← Диагностика"):
             _go("diagnostics")
         return
 
-    # Sort by ROI descending; top-3 get a "recommended" badge
-    services_sorted = sorted(services, key=lambda s: _parse_roi_min(s.get("roi_estimate", "")), reverse=True)
-    top_ids = {s["id"] for s in services_sorted[:3]}
+    # Load full catalog to compute "other available" services
+    try:
+        full_catalog = load_catalog()
+    except Exception:
+        full_catalog = recommended_services
 
-    st.markdown(
-        f'<h2 style="font-size:22px;font-weight:700;color:#1E1E1E;margin-bottom:4px;">Рекомендованные услуги</h2>'
-        f'<p style="font-size:13px;color:#7b7b78;margin-bottom:1.5rem;">'
-        f'Подобрано {len(services_sorted)} услуг по результатам диагностики.</p>',
-        unsafe_allow_html=True,
-    )
+    recommended_ids = {s["id"] for s in recommended_services}
+    other_services  = [s for s in full_catalog if s["id"] not in recommended_ids]
+
+    # Sort recommended by ROI; top-3 get the ★ badge
+    rec_sorted = sorted(recommended_services, key=lambda s: _parse_roi_min(s.get("roi_estimate", "")), reverse=True)
+    top_ids    = {s["id"] for s in rec_sorted[:3]}
 
     ZONE_COLORS = {
         "финансы": "#1E88E5", "операции": "#8E24AA", "маркетинг": "#D81B60",
@@ -827,50 +875,36 @@ def page_catalog():
     }
 
     selected = []
-    for svc in services_sorted:
-        zone       = svc.get("zone", "")
-        zone_color = ZONE_COLORS.get(zone, "#7b7b78")
-        is_top     = svc["id"] in top_ids
 
-        # Top-ROI badge HTML
-        top_badge = (
-            '<span style="background:#FF5600;color:#fff;border-radius:4px;'
-            'padding:2px 10px;font-size:11px;font-weight:700;letter-spacing:0.02em;">'
-            '★ Рекомендуем для максимального результата</span>'
-        ) if is_top else ""
+    # ── Section 1: Recommended ────────────────────────────────────────────────
+    st.markdown(
+        f'<h2 style="font-size:22px;font-weight:700;color:#1E1E1E;margin-bottom:4px;">Рекомендованные услуги</h2>'
+        f'<p style="font-size:13px;color:#7b7b78;margin-bottom:1.5rem;">'
+        f'{len(rec_sorted)} услуги подобраны автоматически по зонам риска вашего бизнеса. '
+        f'Выбраны по умолчанию — снимите галочку, чтобы исключить.</p>',
+        unsafe_allow_html=True,
+    )
 
-        # Card border highlight for top services
-        card_border = "2px solid #FF5600" if is_top else "1px solid #E0DED8"
-
-        col1, col2 = st.columns([0.06, 0.94])
-        with col1:
-            checked = st.checkbox("выбрать", key=f"svc_{svc['id']}", value=True, label_visibility="collapsed")
-        with col2:
-            st.markdown(
-                f'<div style="background:#fff;border:{card_border};border-radius:10px;'
-                f'padding:16px 20px;margin-bottom:2px;transition:box-shadow 0.2s;'
-                f'min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word;">'
-                f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:6px;min-width:0;">'
-                f'<span style="background:{zone_color}15;color:{zone_color};border:1px solid {zone_color}30;'
-                f'border-radius:4px;padding:1px 8px;font-size:11px;font-weight:600;">{zone.capitalize()}</span>'
-                f'<span style="font-size:14px;font-weight:600;color:#1E1E1E;min-width:0;'
-                f'max-width:100%;overflow-wrap:anywhere;word-break:break-word;">{svc["name"]}</span>'
-                f'{top_badge}'
-                f'</div>'
-                f'<p style="font-size:13px;color:#7b7b78;margin-bottom:10px;line-height:1.5;'
-                f'overflow-wrap:anywhere;word-break:break-word;">{svc["description"]}</p>'
-                f'<div style="display:flex;flex-wrap:wrap;gap:12px 20px;font-size:12px;min-width:0;">'
-                f'<span><b style="color:#1E1E1E;">{svc.get("price_range","—")}</b>'
-                f' <span style="color:#7b7b78;">стоимость</span></span>'
-                f'<span><b style="color:#1E1E1E;">{svc.get("duration","—")}</b>'
-                f' <span style="color:#7b7b78;">срок</span></span>'
-                f'<span><b style="color:#FF5600;">{svc.get("roi_estimate","—")}</b>'
-                f' <span style="color:#7b7b78;">ROI</span></span>'
-                f'</div></div>',
-                unsafe_allow_html=True,
-            )
-        if checked:
+    for svc in rec_sorted:
+        is_top = svc["id"] in top_ids
+        if _render_service_card(svc, ZONE_COLORS, is_top, default_checked=True, key_prefix="rec"):
             selected.append(svc["id"])
+
+    # ── Section 2: Other available ────────────────────────────────────────────
+    if other_services:
+        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+        st.markdown(
+            '<h2 style="font-size:18px;font-weight:600;color:#7b7b78;margin-bottom:4px;">'
+            'Другие доступные услуги</h2>'
+            '<p style="font-size:13px;color:#7b7b78;margin-bottom:1.5rem;">'
+            'Эти направления не входят в приоритетные рекомендации, '
+            'но могут усилить результат. Добавьте по желанию.</p>',
+            unsafe_allow_html=True,
+        )
+        other_sorted = sorted(other_services, key=lambda s: _parse_roi_min(s.get("roi_estimate", "")), reverse=True)
+        for svc in other_sorted:
+            if _render_service_card(svc, ZONE_COLORS, is_top=False, default_checked=False, key_prefix="other"):
+                selected.append(svc["id"])
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
     col1, col2 = st.columns(2)
