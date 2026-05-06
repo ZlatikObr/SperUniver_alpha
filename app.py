@@ -640,13 +640,24 @@ def page_analyzing():
     st.session_state.assessment = assessment
 
     show_step("📋 Формирую витрину услуг...")
-    zones         = assessment.get("health_assessment", {}).get("zones", [])
-    risk_zone_ids = [z["name"] for z in zones if z.get("score", 5) <= 3]
-    if not risk_zone_ids:
-        risk_zone_ids = assessment.get("recommended_zone_ids", ["финансы", "стратегия"])
+    catalog = load_catalog()
 
-    catalog  = load_catalog()
-    filtered = filter_services(catalog, risk_zone_ids, profile.get("industry", ""))
+    # Use LLM-recommended service IDs if provided (intelligent, context-aware selection)
+    llm_service_ids = assessment.get("recommended_service_ids", [])
+    if llm_service_ids:
+        filtered = get_services_by_ids(catalog, llm_service_ids)
+        # Fallback: if IDs are invalid/empty, use zone-based filter
+        if not filtered:
+            llm_service_ids = []
+
+    if not llm_service_ids:
+        # Zone-based fallback: filter by zones with score <= 3
+        zones         = assessment.get("health_assessment", {}).get("zones", [])
+        risk_zone_ids = [z["name"] for z in zones if z.get("score", 5) <= 3]
+        if not risk_zone_ids:
+            risk_zone_ids = assessment.get("recommended_zone_ids", ["финансы", "стратегия"])
+        filtered = filter_services(catalog, risk_zone_ids, profile.get("industry", ""))
+
     st.session_state.catalog_services = filtered
 
     show_step("✅ Анализ завершён!")
