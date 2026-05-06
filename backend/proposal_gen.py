@@ -64,17 +64,17 @@ def _format_rub(n: int) -> str:
     return f"{n:,}".replace(",", " ") + " ₽"
 
 
-def _build_package_summary(selected_services: list[dict], for_pdf: bool = False) -> str:
+def _build_package_summary(selected_services: list[dict]) -> str:
     """
     HTML block with two investment scenarios placed at the top of the
     services section:
       • Минимальный пакет — top-3 by ROI
       • Полный пакет      — all selected services
-    for_pdf=True uses HTML <table> layout (WeasyPrint-safe) instead of CSS Grid.
     """
     if not selected_services:
         return ""
 
+    # Sort by max-ROI to find the top-3 recommended
     def roi_key(svc: dict) -> int:
         _, hi = _parse_roi_range(svc.get("roi_estimate", ""))
         return hi
@@ -84,6 +84,7 @@ def _build_package_summary(selected_services: list[dict], for_pdf: bool = False)
     max_pkg = selected_services
 
     def pkg_totals(svcs: list[dict]) -> tuple[int, int, int, int]:
+        """Returns (price_lo, price_hi, roi_lo, roi_hi)."""
         p_lo, p_hi = 0, 0
         r_lo, r_hi = 10_000, 0
         for svc in svcs:
@@ -100,16 +101,19 @@ def _build_package_summary(selected_services: list[dict], for_pdf: bool = False)
 
     mp_lo, mp_hi, mr_lo, mr_hi = pkg_totals(min_pkg)
     fp_lo, fp_hi, fr_lo, fr_hi = pkg_totals(max_pkg)
+
     min_names = " · ".join(s.get("name", "") for s in min_pkg)
+
     same_pkg = len(selected_services) <= 3
 
     if same_pkg:
+        # Only one scenario to show
         block = f"""
-<div style="margin:24px 0 32px;border:1px solid #E0DED8;font-family:Arial,sans-serif;">
+<div style="margin:24px 0 32px;border-radius:12px;overflow:hidden;font-family:Arial,sans-serif;max-width:100%;overflow-wrap:anywhere;word-break:break-word;">
   <div style="background:#1E1E1E;color:#fff;padding:18px 24px;">
     <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;
                 color:#FF5600;font-weight:700;margin-bottom:6px;">Ваш пакет · {len(selected_services)} услуги</div>
-    <div style="font-size:22px;font-weight:800;">
+    <div style="font-size:22px;font-weight:800;letter-spacing:0;overflow-wrap:anywhere;word-break:break-word;">
       {_format_rub(fp_lo)} – {_format_rub(fp_hi)}
     </div>
     <div style="font-size:13px;color:#ccc;margin-top:4px;">
@@ -117,48 +121,6 @@ def _build_package_summary(selected_services: list[dict], for_pdf: bool = False)
     </div>
   </div>
 </div>
-"""
-    elif for_pdf:
-        # WeasyPrint-safe: HTML table instead of CSS Grid
-        block = f"""
-<table style="width:100%;border-collapse:collapse;border:1px solid #E0DED8;
-              font-family:Arial,sans-serif;margin:24px 0 32px;">
-  <tr>
-    <td style="background:#1E1E1E;color:#fff;padding:22px 24px;width:50%;
-               border-right:1px solid #333;vertical-align:top;">
-      <div style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;
-                  color:#FF5600;font-weight:700;margin-bottom:8px;">
-        &#9733; Минимальный пакет · топ-3 по ROI
-      </div>
-      <div style="font-size:22px;font-weight:800;line-height:1.2;">
-        {_format_rub(mp_lo)}<br>
-        <span style="font-size:14px;font-weight:500;color:#aaa;">до {_format_rub(mp_hi)}</span>
-      </div>
-      <div style="font-size:13px;color:#ccc;margin-top:8px;">
-        ROI: <b style="color:#FF5600;">{mr_lo}–{mr_hi}%</b>
-      </div>
-      <div style="font-size:11px;color:#888;margin-top:10px;line-height:1.5;">
-        {min_names}
-      </div>
-    </td>
-    <td style="background:#F7F7F5;padding:22px 24px;width:50%;vertical-align:top;">
-      <div style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;
-                  color:#7b7b78;font-weight:700;margin-bottom:8px;">
-        Полный пакет · все {len(selected_services)} услуг
-      </div>
-      <div style="font-size:22px;font-weight:800;color:#1E1E1E;line-height:1.2;">
-        {_format_rub(fp_lo)}<br>
-        <span style="font-size:14px;font-weight:500;color:#7b7b78;">до {_format_rub(fp_hi)}</span>
-      </div>
-      <div style="font-size:13px;color:#1E1E1E;margin-top:8px;">
-        ROI: <b>{fr_lo}–{fr_hi}%</b>
-      </div>
-      <div style="font-size:11px;color:#7b7b78;margin-top:10px;line-height:1.5;">
-        Комплексная трансформация по всем зонам
-      </div>
-    </td>
-  </tr>
-</table>
 """
     else:
         block = f"""
@@ -622,11 +584,10 @@ def _bar_chart(zones: list[dict]) -> str:
         return ""
 
 
-def _risk_html(top_risks: list[str], for_pdf: bool = False) -> str:
+def _risk_html(top_risks: list[str]) -> str:
     """
     HTML risk-priority block — replaces the old matplotlib chart.
     Text is never clipped because HTML wraps naturally.
-    for_pdf=True uses table layout (no flex/grid) for WeasyPrint compatibility.
     """
     if not top_risks:
         return ""
@@ -637,33 +598,19 @@ def _risk_html(top_risks: list[str], for_pdf: bool = False) -> str:
         color = colors[i]
         label = labels[i]
         risk_text = html_lib.escape(_risk_display_text(risk))
-        if for_pdf:
-            rows += (
-                f'<table style="width:100%;border-collapse:collapse;margin-bottom:6pt;">'
-                f'<tr>'
-                f'<td style="width:26pt;background:{color};color:#fff;font-size:11pt;'
-                f'font-weight:bold;text-align:center;vertical-align:middle;padding:3pt;">{i+1}</td>'
-                f'<td style="padding:3pt 6pt;vertical-align:top;">'
-                f'<span style="font-size:8pt;font-weight:bold;color:{color};text-transform:uppercase;'
-                f'letter-spacing:0.05em;">{label}</span>'
-                f'<div style="font-size:10pt;color:#1E1E1E;line-height:1.5;margin-top:2pt;">{risk_text}</div>'
-                f'</td>'
-                f'</tr></table>'
-            )
-        else:
-            rows += (
-                f'<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:10px;'
-                f'width:100%;min-width:0;max-width:100%;">'
-                f'<div style="min-width:28px;height:28px;border-radius:6px;background:{color};'
-                f'color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;'
-                f'justify-content:center;flex-shrink:0;">{i+1}</div>'
-                f'<div style="flex:1 1 auto;min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word;">'
-                f'<span style="font-size:10px;font-weight:700;color:{color};text-transform:uppercase;'
-                f'letter-spacing:0.06em;">{label}</span>'
-                f'<div style="font-size:13px;color:#1E1E1E;line-height:1.55;margin-top:2px;'
-                f'white-space:normal;overflow-wrap:anywhere;word-break:break-word;max-width:100%;">{risk_text}</div>'
-                f'</div></div>'
-            )
+        rows += (
+            f'<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:10px;'
+            f'width:100%;min-width:0;max-width:100%;">'
+            f'<div style="min-width:28px;height:28px;border-radius:6px;background:{color};'
+            f'color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;'
+            f'justify-content:center;flex-shrink:0;">{i+1}</div>'
+            f'<div style="flex:1 1 auto;min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word;">'
+            f'<span style="font-size:10px;font-weight:700;color:{color};text-transform:uppercase;'
+            f'letter-spacing:0.06em;">{label}</span>'
+            f'<div style="font-size:13px;color:#1E1E1E;line-height:1.55;margin-top:2px;'
+            f'white-space:normal;overflow-wrap:anywhere;word-break:break-word;max-width:100%;">{risk_text}</div>'
+            f'</div></div>'
+        )
     return (
         f'<div class="chart-card chart-full">'
         f'<h3>Приоритет рисков</h3>'
@@ -722,7 +669,7 @@ def _zone_explanations_html(zones: list[dict]) -> str:
 # ─── HTML renderer ────────────────────────────────────────────────────────────
 
 def render_html(proposal_markdown: str, profile: dict, assessment: dict = None,
-                selected_services: list = None, for_pdf: bool = False) -> str:
+                selected_services: list = None) -> str:
     try:
         import markdown as md_lib
         body_html = md_lib.markdown(proposal_markdown, extensions=["tables", "fenced_code"])
@@ -733,8 +680,9 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None,
 
     # Inject investment summary card directly into HTML (bypasses Markdown parser stripping)
     if selected_services:
-        summary_html = _build_package_summary(selected_services, for_pdf=for_pdf)
+        summary_html = _build_package_summary(selected_services)
         if summary_html:
+            # Find the "Предлагаемые услуги" heading and inject right after it
             import re as _re
             heading_pattern = _re.compile(
                 r'(<h2[^>]*>[^<]*[Пп]редлагаемые\s+услуги[^<]*</h2>)',
@@ -753,7 +701,7 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None,
 
         radar_b64 = _radar_chart(zones)
         bar_b64 = _bar_chart(zones)
-        risk_block = _risk_html(top_risks, for_pdf=for_pdf)  # HTML block — no text clipping
+        risk_block = _risk_html(top_risks)  # HTML block — no text clipping
         zone_explanations = _zone_explanations_html(zones)
 
         if radar_b64 and bar_b64:
@@ -775,150 +723,13 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None,
 </div>
 """
 
-    # ── CSS: two variants — web (with Google Fonts + grid) and PDF (table layout, no external URLs)
-    if for_pdf:
-        css = f"""
-  /* ── PDF / WeasyPrint stylesheet — no external URLs, table-based layout ── */
-  @page {{
-    size: A4;
-    margin: 18mm 16mm 18mm 16mm;
-  }}
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 11pt;
-    color: #1E1E1E;
-    background: #fff;
-    line-height: 1.5;
-  }}
-  .wrapper {{ width: 100%; }}
-
-  /* ── Header as table ── */
-  .header {{
-    display: table;
-    width: 100%;
-    border-bottom: 2pt solid #FF5600;
-    padding-bottom: 14pt;
-    margin-bottom: 20pt;
-  }}
-  .header-left, .header-meta {{
-    display: table-cell;
-    vertical-align: top;
-  }}
-  .header-meta {{ text-align: right; font-size: 9pt; color: #7b7b78; line-height: 1.8; }}
-  .brand {{ font-size: 16pt; font-weight: bold; color: #1E1E1E; }}
-  .brand-dot {{
-    display: inline-block; width: 7pt; height: 7pt; border-radius: 50%;
-    background: #FF5600; margin-left: 3pt;
-  }}
-  .brand-sub {{ font-size: 8pt; color: #7b7b78; letter-spacing: 0.05em; margin-top: 2pt; }}
-
-  /* ── Headings ── */
-  h2 {{
-    font-size: 13pt; font-weight: bold; color: #1E1E1E;
-    margin: 18pt 0 8pt; padding-left: 8pt;
-    border-left: 3pt solid #FF5600;
-    page-break-after: avoid;
-  }}
-  h3 {{ font-size: 11pt; font-weight: bold; color: #1E1E1E; margin: 10pt 0 5pt; page-break-after: avoid; }}
-  p {{ line-height: 1.6; margin-bottom: 7pt; color: #1E1E1E; }}
-  ul, ol {{ padding-left: 16pt; margin-bottom: 8pt; }}
-  li {{ line-height: 1.6; margin-bottom: 2pt; }}
-  strong {{ font-weight: bold; }}
-
-  /* ── Tables ── */
-  table {{
-    width: 100%; border-collapse: collapse; margin: 10pt 0; font-size: 9pt;
-    table-layout: fixed;
-  }}
-  th {{
-    background: #1E1E1E; color: #fff; padding: 7pt 9pt;
-    text-align: left; font-weight: bold; font-size: 9pt;
-    border: 1pt solid #333;
-  }}
-  td {{
-    padding: 7pt 9pt; border: 1pt solid #E0DED8;
-    vertical-align: top; font-size: 9pt;
-    word-wrap: break-word;
-  }}
-  tr:nth-child(even) td {{ background: #F7F7F5; }}
-  tr {{ page-break-inside: avoid; }}
-
-  /* ── Charts section — table layout (WeasyPrint has no grid) ── */
-  .charts-section {{ margin: 16pt 0; page-break-inside: avoid; }}
-  .charts-grid {{
-    display: table;
-    width: 100%;
-    border-spacing: 8pt 0;
-    margin-top: 10pt;
-  }}
-  .chart-card {{
-    display: table-cell;
-    width: 50%;
-    background: #F7F7F5;
-    border: 1pt solid #E0DED8;
-    padding: 12pt;
-    vertical-align: top;
-  }}
-  .chart-card h3 {{
-    font-size: 9pt; color: #7b7b78; font-weight: bold;
-    text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8pt;
-  }}
-  .chart-full {{ display: block; width: 100%; margin-top: 8pt; }}
-  .chart-full .chart-card {{ display: block; width: auto; }}
-
-  /* ── Risk list — table layout ── */
-  .risk-list {{ list-style: none; padding-left: 0; margin: 8pt 0 0; }}
-  .risk-list li {{
-    display: table;
-    width: 100%;
-    margin-bottom: 6pt;
-    color: #1E1E1E;
-    line-height: 1.5;
-  }}
-  .risk-num {{
-    display: table-cell;
-    width: 18pt;
-    height: 18pt;
-    background: #FF5600;
-    color: #fff;
-    font-size: 8pt;
-    font-weight: bold;
-    text-align: center;
-    vertical-align: middle;
-    padding: 2pt;
-  }}
-  .risk-text {{ display: table-cell; padding-left: 6pt; vertical-align: top; font-size: 10pt; }}
-
-  /* ── Zone evidence table ── */
-  .zone-evidence {{ margin-top: 12pt; }}
-  .zone-evidence table {{ font-size: 9pt; }}
-
-  /* ── Highlight box ── */
-  .highlight {{
-    background: #FFF3EE; border-left: 3pt solid #FF5600;
-    padding: 10pt 14pt; margin: 10pt 0; font-size: 10pt; line-height: 1.6;
-  }}
-
-  /* ── Footer ── */
-  .footer {{
-    margin-top: 24pt; padding-top: 10pt; border-top: 1pt solid #E0DED8;
-    font-size: 8pt; color: #7b7b78; font-style: italic;
-  }}
-"""
-        header_html = f"""
-  <div class="header">
-    <div class="header-left">
-      <div class="brand">ПУЛЬС <span class="brand-dot"></span></div>
-      <div class="brand-sub">AI-ДИАГНОСТИКА БИЗНЕСА</div>
-    </div>
-    <div class="header-meta">
-      {company_info}<br>
-      Дата: {today}
-    </div>
-  </div>"""
-    else:
-        css = f"""
+    return f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>КП — Пульс</title>
+<style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
   * {{ box-sizing: border-box; margin: 0; padding: 0; min-width: 0; }}
   html, body {{ max-width: 100%; overflow-x: hidden; }}
@@ -984,6 +795,7 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None,
   @media print {{
     body {{ font-size: 12px; }}
     .wrapper {{ padding: 24px 28px; }}
+    .charts-grid {{ grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }}
   }}
 
   @media (max-width: 720px) {{
@@ -992,8 +804,10 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None,
     .header-meta {{ text-align: left; }}
     .charts-grid {{ grid-template-columns: minmax(0, 1fr); }}
   }}
-"""
-        header_html = f"""
+</style>
+</head>
+<body>
+<div class="wrapper">
   <div class="header">
     <div>
       <div class="brand">ПУЛЬС <span class="brand-dot"></span></div>
@@ -1003,21 +817,7 @@ def render_html(proposal_markdown: str, profile: dict, assessment: dict = None,
       {company_info}<br>
       Дата: {today}
     </div>
-  </div>"""
-
-    return f"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>КП — Пульс</title>
-<style>
-{css}
-</style>
-</head>
-<body>
-<div class="wrapper">
-  {header_html}
+  </div>
 
   {charts_html}
 

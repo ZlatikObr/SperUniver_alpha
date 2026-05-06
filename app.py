@@ -312,7 +312,6 @@ def _init_state():
         "selected_ids": [],
         "proposal_markdown": "",
         "proposal_html": "",
-        "proposal_html_pdf": "",
         "proposal_render_version": "",
         "start_ts": None,
         "last_doc_error": "",
@@ -977,21 +976,12 @@ def page_generating():
                 st.session_state.business_profile,
                 st.session_state.assessment,
                 selected_services=selected_services,
-                for_pdf=False,
-            )
-            st.session_state.proposal_html_pdf = render_html(
-                proposal_md,
-                st.session_state.business_profile,
-                st.session_state.assessment,
-                selected_services=selected_services,
-                for_pdf=True,
             )
             st.session_state.proposal_render_version = REPORT_RENDER_VERSION
         except Exception as exc:
             logger.warning("HTML rendering failed in app.", exc_info=True)
             log_agent_step("app.page_generating.render_html", "error", error=exc)
             st.session_state.proposal_html = f"<pre>{proposal_md}</pre>"
-            st.session_state.proposal_html_pdf = st.session_state.proposal_html
             st.session_state.proposal_render_version = REPORT_RENDER_VERSION
 
     _go("proposal")
@@ -1032,10 +1022,9 @@ def page_proposal():
         unsafe_allow_html=True,
     )
 
-    # Generate PDF using the WeasyPrint-optimized HTML version
+    # Generate PDF
     with st.spinner("Генерирую PDF..."):
-        pdf_html = st.session_state.get("proposal_html_pdf") or st.session_state.proposal_html
-        pdf_bytes = render_pdf(pdf_html)
+        pdf_bytes = render_pdf(st.session_state.proposal_html)
 
     col1, col2 = st.columns(2)
     with col1:
