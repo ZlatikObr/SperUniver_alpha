@@ -6,7 +6,7 @@ from ._utils import (
     extract_json_object as _extract_json_object,
     load_prompt as _load_prompt,
 )
-from .agent_logger import log_agent_step
+from .agent_logger import log_agent_step, log_token_usage
 
 BASE_QUESTIONS = [
     {
@@ -123,6 +123,7 @@ def generate_followup_questions(answers: dict, client: OpenAI) -> list[dict]:
             ]
         )
 
+        log_token_usage("survey.generate_followup_questions", response.usage, model=MODEL)
         raw = response.choices[0].message.content or ""
         result = _extract_json_array(raw)
         if result:
@@ -166,6 +167,7 @@ def build_business_profile(base_answers: dict, followup_answers: dict, client: O
             ]
         )
 
+        log_token_usage("survey.build_business_profile", response.usage, model=MODEL)
         raw = response.choices[0].message.content or ""
         result = _extract_json_object(raw)
         if result:

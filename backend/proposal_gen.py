@@ -15,7 +15,7 @@ from openai import OpenAI
 
 from ._config import MODEL
 from ._utils import load_prompt as _load_prompt
-from .agent_logger import log_agent_step
+from .agent_logger import log_agent_step, log_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -425,6 +425,7 @@ def generate_proposal_text(
                 {"role": "user", "content": user_message},
             ],
         )
+        log_token_usage("proposal_gen.generate_proposal_text", response.usage, model=MODEL)
         narrative = response.choices[0].message.content or ""
     except Exception as exc:
         logger.warning("LLM proposal generation failed; using fallback narrative.", exc_info=True)

@@ -17,7 +17,7 @@ from openai import OpenAI
 
 from ._config import MODEL
 from ._utils import extract_json_object as _extract_json_object, load_prompt as _load_prompt
-from .agent_logger import log_agent_step
+from .agent_logger import log_agent_step, log_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -539,6 +539,7 @@ def _call_llm_direct(system: str, user_content: str, client: OpenAI) -> dict | N
             {"role": "user", "content": user_content},
         ],
     )
+    log_token_usage("auditor.call_llm_direct", response.usage, model=MODEL)
     return _extract_json_object(response.choices[0].message.content or "")
 
 
@@ -557,6 +558,7 @@ def _run_with_tools(system: str, user_content: str, client: OpenAI) -> dict | No
             tool_choice="auto",
         )
         choice = response.choices[0]
+        log_token_usage("auditor.run_with_tools", response.usage, model=MODEL)
         if choice.finish_reason == "stop":
             return _extract_json_object(choice.message.content or "")
         if choice.finish_reason == "tool_calls":
