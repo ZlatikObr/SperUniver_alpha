@@ -1,6 +1,7 @@
 """Пульс — AI-диагностика бизнеса."""
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -70,6 +71,10 @@ SCORE_COLORS = {1: "#E53935", 2: "#FB8C00", 3: "#FDD835", 4: "#43A047", 5: "#1E8
 SCORE_LABELS = {1: "Критично", 2: "Проблемно", 3: "Требует внимания", 4: "Удовлетворительно", 5: "Сильная зона"}
 ZONE_ICONS  = {"финансы": "₽", "операции": "⚙", "маркетинг": "◈", "команда": "◉", "стратегия": "◎"}
 REPORT_RENDER_VERSION = "2026-05-05-risk-wrap-v2"
+DETAILED_ANSWER_NOTE = (
+    "Пишите максимально подробно: конкретные факты, цифры, сроки и контекст сильно влияют на качество итоговой диагностики."
+)
+COMPANY_NAME_PREFIX_RE = re.compile(r"^\s*компания\s*[:—-]\s*\S+", re.IGNORECASE)
 
 CSS = """
 <style>
@@ -497,7 +502,10 @@ def page_survey_base():
             if qtype == "select":
                 answers[qid] = st.selectbox(label, q["options"], key=f"base_{qid}")
             elif qtype == "textarea":
-                answers[qid] = st.text_area(label, placeholder=q.get("placeholder", ""), key=f"base_{qid}", height=90)
+                if qid == "main_challenge":
+                    label = f"{label}\n\nОбязательно начните с названия компании в формате: `Компания: <название>`."
+                label = f"{label}\n\n_{DETAILED_ANSWER_NOTE}_"
+                answers[qid] = st.text_area(label, placeholder=q.get("placeholder", ""), key=f"base_{qid}", height=110)
             else:
                 answers[qid] = st.text_input(label, placeholder=q.get("placeholder", ""), key=f"base_{qid}")
 
@@ -505,8 +513,11 @@ def page_survey_base():
         submitted = st.form_submit_button("Продолжить →", use_container_width=True, type="primary")
 
     if submitted:
-        if answers.get("main_challenge", "").strip() == "":
+        main_challenge = answers.get("main_challenge", "").strip()
+        if main_challenge == "":
             st.warning("Пожалуйста, опишите главную проблему.")
+        elif not COMPANY_NAME_PREFIX_RE.search(main_challenge):
+            st.warning("Пожалуйста, начните описание главной проблемы с названия компании в формате: Компания: <название>.")
         else:
             _reset_generated_flow()
             st.session_state.base_answers = answers
@@ -527,7 +538,8 @@ def page_survey_followup():
 
     st.markdown(
         '<h2 style="font-size:22px;font-weight:700;color:#1E1E1E;margin-bottom:4px;">Уточняющие вопросы</h2>'
-        '<p style="font-size:13px;color:#7b7b78;margin-bottom:1.5rem;">Сформированы на основе ваших ответов</p>',
+        f'<p style="font-size:13px;color:#7b7b78;margin-bottom:1.5rem;">'
+        f'Сформированы на основе ваших ответов. {DETAILED_ANSWER_NOTE}</p>',
         unsafe_allow_html=True,
     )
 
@@ -544,7 +556,7 @@ def page_survey_followup():
             if qtype == "select" and q.get("options"):
                 answers[qid] = st.selectbox(label, q["options"], key=f"fu_{qid}")
             else:
-                answers[qid] = st.text_area(label, key=f"fu_{qid}", height=80)
+                answers[qid] = st.text_area(f"{label}\n\n_{DETAILED_ANSWER_NOTE}_", key=f"fu_{qid}", height=95)
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         col1, col2 = st.columns(2)
@@ -567,7 +579,7 @@ def page_document():
         '<p style="font-size:13px;color:#7b7b78;margin-bottom:1.5rem;">'
         'Для более точной диагностики загрузите управленческий P&L/ОПиУ, ДДС/cash-flow, баланс, '
         'оборотно-сальдовую ведомость, выгрузку продаж/выручки, структуру затрат или маркетинговый отчёт '
-        'с CAC/LTV. Можно добавить несколько PDF, CSV или Excel.</p>',
+        'с CAC/LTV. PDF-файл можно прикрепить только один; CSV и Excel можно добавить несколько.</p>',
         unsafe_allow_html=True,
     )
 
@@ -577,13 +589,17 @@ def page_document():
         label_visibility="collapsed",
         accept_multiple_files=True,
     )
+    pdf_count = sum(1 for uploaded in uploaded_files if uploaded.name.lower().endswith(".pdf")) if uploaded_files else 0
+    too_many_pdfs = pdf_count > 1
+    if too_many_pdfs:
+        st.warning("PDF-файл можно прикрепить только один. Удалите лишние PDF или загрузите дополнительные данные в CSV/Excel.")
 
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
     col1, col2 = st.columns(2)
     with col1:
         skip = st.button("Пропустить", use_container_width=True)
     with col2:
-        proceed = st.button("Продолжить →", use_container_width=True, type="primary", disabled=not uploaded_files)
+        proceed = st.button("Продолжить →", use_container_width=True, type="primary", disabled=not uploaded_files or too_many_pdfs)
 
     st.markdown(
         '<p style="font-size:11px;color:#C3C2BD;margin-top:10px;">'
