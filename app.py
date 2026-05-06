@@ -327,6 +327,25 @@ def _go(step: str):
     st.rerun()
 
 
+def _reset_generated_flow():
+    """Clear generated state when base survey answers may change."""
+    st.session_state.followup_questions = []
+    st.session_state.followup_answers = {}
+    st.session_state.doc_result = None
+    st.session_state.doc_warnings = []
+    st.session_state.business_profile = {}
+    st.session_state.assessment = {}
+    st.session_state.catalog_services = []
+    st.session_state.selected_ids = []
+    st.session_state.proposal_markdown = ""
+    st.session_state.proposal_html = ""
+    st.session_state.proposal_render_version = ""
+    st.session_state.last_doc_error = ""
+    for key in list(st.session_state.keys()):
+        if key.startswith("fu_"):
+            del st.session_state[key]
+
+
 def _get_client() -> OpenAI:
     # Streamlit Cloud secrets take priority, then .env
     try:
@@ -489,6 +508,7 @@ def page_survey_base():
         if answers.get("main_challenge", "").strip() == "":
             st.warning("Пожалуйста, опишите главную проблему.")
         else:
+            _reset_generated_flow()
             st.session_state.base_answers = answers
             with st.spinner("Формирую уточняющие вопросы..."):
                 followup = generate_followup_questions(answers, _get_client())
@@ -510,6 +530,10 @@ def page_survey_followup():
         '<p style="font-size:13px;color:#7b7b78;margin-bottom:1.5rem;">Сформированы на основе ваших ответов</p>',
         unsafe_allow_html=True,
     )
+
+    if st.button("← Назад к опросу", use_container_width=True):
+        _reset_generated_flow()
+        _go("survey_base")
 
     with st.form("followup_form"):
         answers = {}
